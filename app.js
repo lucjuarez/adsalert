@@ -1,12 +1,13 @@
 const express = require("express");
 const axios = require("axios");
 const cron = require("node-cron");
-const cors = require("cors"); // 👈 AGREGAR
+const cors = require("cors");
 const { sendEmail } = require("./email");
 
 const app = express();
 
-app.use(cors()); // 👈 AGREGAR
+// ✅ CORS ACTIVADO
+app.use(cors());
 
 // 🧠 MEMORIA DE ESTADOS (ANTI-SPAM)
 let lastStatus = {};
@@ -92,12 +93,12 @@ function checkAlerts(data) {
   };
 }
 
-// 🧪 TEST BACKEND
+// 🧪 TEST
 app.get("/", (req, res) => {
   res.send("🚨 AdsAlert funcionando");
 });
 
-// 🔍 ENDPOINT MANUAL
+// 🔍 ENDPOINT
 app.get("/check", async (req, res) => {
   try {
     const acc = accounts[0];
@@ -129,7 +130,7 @@ app.get("/test-email", async (req, res) => {
   }
 });
 
-// 🔥 CRON AUTOMÁTICO (cada minuto para test)
+// 🔥 CRON (cada minuto para test)
 cron.schedule("* * * * *", async () => {
   console.log("⏰ Ejecutando monitoreo automático...");
 
@@ -143,7 +144,6 @@ cron.schedule("* * * * *", async () => {
 
       const prev = lastStatus[acc.account_id];
 
-      // 🔥 SOLO ACTÚA SI CAMBIA EL ESTADO
       if (alert.type !== prev) {
         lastStatus[acc.account_id] = alert.type;
 
@@ -163,7 +163,9 @@ cron.schedule("* * * * *", async () => {
   }
 });
 
-// 🚀 SERVER
-app.listen(3000, () => {
-  console.log("Servidor corriendo en http://localhost:3000");
+// 🚀 SERVER (IMPORTANTE PARA RENDER)
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
