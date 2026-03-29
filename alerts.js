@@ -1,7 +1,6 @@
 function checkAlerts(data) {
   const { spend, results } = data;
 
-  // ⚠️ Sin actividad
   if (spend === 0 && results === 0) {
     return {
       type: "warning",
@@ -9,7 +8,6 @@ function checkAlerts(data) {
     };
   }
 
-  // 🚨 Gasto sin resultados
   if (spend > 0 && results === 0) {
     return {
       type: "critical",
@@ -17,7 +15,6 @@ function checkAlerts(data) {
     };
   }
 
-  // ✅ Todo OK
   if (spend > 0 && results > 0) {
     return {
       type: "ok",
@@ -25,7 +22,6 @@ function checkAlerts(data) {
     };
   }
 
-  // ℹ️ fallback
   return {
     type: "info",
     message: "ℹ️ Sin datos suficientes"

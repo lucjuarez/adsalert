@@ -14,7 +14,7 @@ let lastStatus = {};
 
 // 🔐 CONFIG
 const config = {
-  token: "EAANFB0xZCBaUBRG3FnKZCNdjcNot3LLmuZC7A2SMdm2cRkCCoZAqZCMoAxd8ZBbYZAjJtbMYMSSqLZAKBrEKhVeHjqEFVS9wglGMYDO7FyuxmP73GwSczwZAdEZC5jGMBUmYFkqQ8UPsGZAI8E2W87Tr08VxOrROEDT4oXyF2GiiLx4owKOyBXplI7u2aoP4LYquyjQNv2ZAgDMJoeAvrkZC5KBZC6R6ZA3L9cRm754zpbz8ZC783lvdZBcJLf7G2x8dp9beGsZAjZB8T6jhMZBC2Rng2rafaVTuOCrh", // 🔥 reemplazar por tu token
+  token: "EAANFB0xZCBaUBRG3FnKZCNdjcNot3LLmuZC7A2SMdm2cRkCCoZAqZCMoAxd8ZBbYZAjJtbMYMSSqLZAKBrEKhVeHjqEFVS9wglGMYDO7FyuxmP73GwSczwZAdEZC5jGMBUmYFkqQ8UPsGZAI8E2W87Tr08VxOrROEDT4oXyF2GiiLx4owKOyBXplI7u2aoP4LYquyjQNv2ZAgDMJoeAvrkZC5KBZC6R6ZA3L9cRm754zpbz8ZC783lvdZBcJLf7G2x8dp9beGsZAjZB8T6jhMZBC2Rng2rafaVTuOCrh",
   email: "lucjuarez@msn.com"
 };
 
@@ -23,7 +23,7 @@ app.get("/", (req, res) => {
   res.send("🚨 AdsAlert funcionando");
 });
 
-// 🔍 ENDPOINT MULTICUENTAS
+// 🔍 MULTICUENTAS
 app.get("/check", async (req, res) => {
   try {
     const accounts = await getAdAccounts(config.token);
@@ -32,13 +32,17 @@ app.get("/check", async (req, res) => {
 
     for (let acc of accounts) {
 
-      const accountId = acc.id.replace("act_", "");
+      const accountId = acc.account_id;
 
-      // 🔥 SOLO cuentas con campañas activas
+      // 🔥 SOLO ACTIVAS
       const active = await hasActiveCampaigns(accountId, config.token);
       if (!active) continue;
 
       const data = await getInsights(accountId, config.token);
+
+      // 🔥 FILTRO EXTRA (evita ruido)
+      if (data.spend < 1) continue;
+
       const alert = checkAlerts(data);
 
       results.push({
@@ -57,52 +61,45 @@ app.get("/check", async (req, res) => {
   }
 });
 
-// 🔥 CRON AUTOMÁTICO (cada 10 min)
+// 🔥 CRON
 cron.schedule("*/10 * * * *", async () => {
-  console.log("⏰ Ejecutando monitoreo...");
+  console.log("⏰ Monitoreo...");
 
   try {
     const accounts = await getAdAccounts(config.token);
 
     for (let acc of accounts) {
       try {
-        const accountId = acc.id.replace("act_", "");
+        const accountId = acc.account_id;
 
         const active = await hasActiveCampaigns(accountId, config.token);
-        if (!active) {
-          console.log(`⏭️ ${acc.name} sin campañas activas`);
-          continue;
-        }
+        if (!active) continue;
 
         const data = await getInsights(accountId, config.token);
+        if (data.spend < 1) continue;
+
         const alert = checkAlerts(data);
 
-        console.log(`📊 ${acc.name}`, data);
-        console.log(`🚨 ${acc.name}`, alert);
+        const prev = lastStatus[acc.account_id];
 
-        const prev = lastStatus[acc.id];
-
-        // 🧠 SOLO SI CAMBIA EL ESTADO
         if (alert.type !== prev) {
-          lastStatus[acc.id] = alert.type;
+          lastStatus[acc.account_id] = alert.type;
 
           if (alert.type === "warning" || alert.type === "critical") {
             await sendEmail({
               message: `${acc.name}: ${alert.message}`,
               email: config.email
             });
-
-            console.log(`📩 Email enviado: ${acc.name}`);
           }
         }
 
-      } catch (error) {
-        console.log(`❌ Error en ${acc.name}:`, error.message);
+      } catch (err) {
+        console.log("Error cuenta:", err.message);
       }
     }
 
-  } catch (error) {
-    console.log("❌ Error general:", error.message);
+  } catch (err) {
+    console.log("Error general:", err.message);
   }
 });
 
@@ -110,5 +107,5 @@ cron.schedule("*/10 * * * *", async () => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 AdsAlert corriendo en puerto ${PORT}`);
+  console.log(`🚀 Server en puerto ${PORT}`);
 });

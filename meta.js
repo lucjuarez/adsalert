@@ -1,92 +1,75 @@
 const axios = require("axios");
 
-// 📊 MÉTRICAS
+// 📊 OBTENER MÉTRICAS
 async function getInsights(accountId, token) {
-  try {
-    const url = `https://graph.facebook.com/v19.0/act_${accountId}/insights`;
+  const url = `https://graph.facebook.com/v19.0/act_${accountId}/insights`;
 
-    const res = await axios.get(url, {
-      params: {
-        fields: "spend,impressions,clicks,actions",
-        date_preset: "last_7d",
-        access_token: token,
-      },
-    });
+  const res = await axios.get(url, {
+    params: {
+      fields: "spend,actions",
+      date_preset: "last_7d",
+      access_token: token,
+    },
+  });
 
-    const data = res.data.data[0] || {};
+  const data = res.data.data[0] || {};
 
-    const spend = parseFloat(data.spend || 0);
+  const spend = parseFloat(data.spend || 0);
 
-    let results = 0;
+  // 🔥 RESULTADOS PRO (tipo MetaReport)
+  let results = 0;
 
-    if (data.actions) {
-      const actionsPriority = [
-        "purchase",
-        "lead",
-        "messaging_conversation_started_7d",
-        "landing_page_view"
-      ];
+  if (data.actions) {
+    const importantActions = [
+      "purchase",
+      "omni_purchase",
+      "offsite_conversion.fb_pixel_purchase",
+      "lead",
+      "onsite_conversion.lead",
+      "messaging_conversation_started_7d",
+      "landing_page_view"
+    ];
 
-      for (let type of actionsPriority) {
-        const found = data.actions.find(a => a.action_type === type);
-        if (found) {
-          results = parseInt(found.value);
-          break;
-        }
+    for (let action of data.actions) {
+      if (importantActions.includes(action.action_type)) {
+        results += parseInt(action.value);
       }
     }
-
-    const cpa = results > 0 ? spend / results : 0;
-
-    return { spend, results, cpa };
-
-  } catch (error) {
-    console.log("❌ Error en Meta Insights:", error.response?.data || error.message);
-
-    return {
-      spend: 0,
-      results: 0,
-      cpa: 0,
-      error: true
-    };
   }
+
+  const cpa = results > 0 ? spend / results : 0;
+
+  return { spend, results, cpa };
 }
 
-// 📋 TODAS LAS CUENTAS
+// 📊 OBTENER CUENTAS PUBLICITARIAS
 async function getAdAccounts(token) {
-  try {
-    const res = await axios.get("https://graph.facebook.com/v19.0/me/adaccounts", {
-      params: {
-        fields: "id,name,account_status",
-        access_token: token
-      }
-    });
+  const url = `https://graph.facebook.com/v19.0/me/adaccounts`;
 
-    // 🔥 SOLO cuentas activas
-    return res.data.data.filter(acc => acc.account_status === 1);
+  const res = await axios.get(url, {
+    params: {
+      fields: "name,account_id",
+      access_token: token
+    }
+  });
 
-  } catch (error) {
-    console.log("❌ Error obteniendo cuentas:", error.response?.data || error.message);
-    return [];
-  }
+  return res.data.data;
 }
 
-// 🚀 DETECTAR CAMPAÑAS ACTIVAS
+// 🔥 VALIDAR CAMPAÑAS ACTIVAS (REAL)
 async function hasActiveCampaigns(accountId, token) {
-  try {
-    const res = await axios.get(`https://graph.facebook.com/v19.0/act_${accountId}/campaigns`, {
-      params: {
-        fields: "status",
-        access_token: token
-      }
-    });
+  const url = `https://graph.facebook.com/v19.0/act_${accountId}/campaigns`;
 
-    return res.data.data.some(c => c.status === "ACTIVE");
+  const res = await axios.get(url, {
+    params: {
+      fields: "effective_status",
+      access_token: token
+    }
+  });
 
-  } catch (error) {
-    console.log("❌ Error campañas:", error.response?.data || error.message);
-    return false;
-  }
+  const campaigns = res.data.data;
+
+  return campaigns.some(c => c.effective_status === "ACTIVE");
 }
 
 module.exports = {
