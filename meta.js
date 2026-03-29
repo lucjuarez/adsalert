@@ -1,5 +1,6 @@
 const axios = require("axios");
 
+// 📊 MÉTRICAS
 async function getInsights(accountId, token) {
   try {
     const url = `https://graph.facebook.com/v19.0/act_${accountId}/insights`;
@@ -40,7 +41,7 @@ async function getInsights(accountId, token) {
     return { spend, results, cpa };
 
   } catch (error) {
-    console.log("❌ Error en Meta API:", error.response?.data || error.message);
+    console.log("❌ Error en Meta Insights:", error.response?.data || error.message);
 
     return {
       spend: 0,
@@ -51,4 +52,45 @@ async function getInsights(accountId, token) {
   }
 }
 
-module.exports = { getInsights };
+// 📋 TODAS LAS CUENTAS
+async function getAdAccounts(token) {
+  try {
+    const res = await axios.get("https://graph.facebook.com/v19.0/me/adaccounts", {
+      params: {
+        fields: "id,name,account_status",
+        access_token: token
+      }
+    });
+
+    // 🔥 SOLO cuentas activas
+    return res.data.data.filter(acc => acc.account_status === 1);
+
+  } catch (error) {
+    console.log("❌ Error obteniendo cuentas:", error.response?.data || error.message);
+    return [];
+  }
+}
+
+// 🚀 DETECTAR CAMPAÑAS ACTIVAS
+async function hasActiveCampaigns(accountId, token) {
+  try {
+    const res = await axios.get(`https://graph.facebook.com/v19.0/act_${accountId}/campaigns`, {
+      params: {
+        fields: "status",
+        access_token: token
+      }
+    });
+
+    return res.data.data.some(c => c.status === "ACTIVE");
+
+  } catch (error) {
+    console.log("❌ Error campañas:", error.response?.data || error.message);
+    return false;
+  }
+}
+
+module.exports = {
+  getInsights,
+  getAdAccounts,
+  hasActiveCampaigns
+};

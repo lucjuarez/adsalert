@@ -1,3 +1,4 @@
+const { getInsights, getAdAccounts, hasActiveCampaigns } = require("./meta");
 const express = require("express");
 const axios = require("axios");
 const cron = require("node-cron");
