@@ -1,113 +1,48 @@
-const { getInsights, getAdAccounts, hasActiveCampaigns } = require("./meta");
 const express = require("express");
-const axios = require("axios");
 const cron = require("node-cron");
 const cors = require("cors");
+
 const { sendEmail } = require("./email");
+const { getInsights, getAdAccounts, hasActiveCampaigns } = require("./meta");
+const { checkAlerts } = require("./alerts");
 
 const app = express();
-
-// ✅ CORS ACTIVADO
 app.use(cors());
 
-// 🧠 MEMORIA DE ESTADOS (ANTI-SPAM)
+// 🧠 MEMORIA ANTI-SPAM
 let lastStatus = {};
 
-// 🧠 MULTICUENTAS
-const accounts = [
-  {
-    name: "Cuenta Luciano",
-    account_id: "573798197933238",
-    token: "EAANFB0xZCBaUBRBNQx3iZCZAaESaKHz9CFhAH3udJ0Pl421YTNx6KgNZA5qoKc0uQoZC5oBUc572pvLexdF4iqgrjQLlZBVJngmr7KjjZArJBVTtEnC0AY2Cfh2a4CB9QZC4ZBvzu9HsqTV1O2SEBKREM706MjvZCCfsO94kJWNvGqmWxU1qhZBGAtlSZBHNZBlkWDC3DBdzI07YR2xb6rk3uxaIxG1VqDii6zE39zDMoHrZCurmIYGpUYbJx8V4V195McNN3hhoFZCiXLGVeOGHcuZBmjUJ7okkZAwZDZD",
-    email: "lucjuarez@msn.com"
-  }
-];
-
-// 📊 FUNCIÓN META
-async function getInsights(accountId, token) {
-  const url = `https://graph.facebook.com/v19.0/act_${accountId}/insights`;
-
-  const res = await axios.get(url, {
-    params: {
-      fields: "spend,impressions,clicks,actions",
-      date_preset: "last_7d",
-      access_token: token,
-    },
-  });
-
-  const data = res.data.data[0] || {};
-
-  const spend = parseFloat(data.spend || 0);
-
-  let results = 0;
-
-  if (data.actions) {
-    const actionsPriority = [
-      "purchase",
-      "lead",
-      "messaging_conversation_started_7d",
-      "landing_page_view"
-    ];
-
-    for (let type of actionsPriority) {
-      const found = data.actions.find(a => a.action_type === type);
-      if (found) {
-        results = parseInt(found.value);
-        break;
-      }
-    }
-  }
-
-  const cpa = results > 0 ? spend / results : 0;
-
-  return { spend, results, cpa };
-}
-
-// 🚨 ALERTAS
-function checkAlerts(data) {
-  const { spend, results } = data;
-
-  if (spend === 0 && results === 0) {
-    return {
-      type: "warning",
-      message: "⚠️ No hay actividad en la cuenta (campañas pausadas o sin presupuesto)"
-    };
-  }
-
-  if (spend > 0 && results === 0) {
-    return {
-      type: "critical",
-      message: "🚨 Estás gastando dinero sin obtener resultados"
-    };
-  }
-
-  if (spend > 0 && results > 0) {
-    return {
-      type: "ok",
-      message: "✅ Tus campañas están funcionando correctamente"
-    };
-  }
-
-  return {
-    type: "info",
-    message: "ℹ️ Sin datos suficientes"
-  };
-}
+// 🔐 CONFIG
+const config = {
+  token: "EAANFB0xZCBaUBRG3FnKZCNdjcNot3LLmuZC7A2SMdm2cRkCCoZAqZCMoAxd8ZBbYZAjJtbMYMSSqLZAKBrEKhVeHjqEFVS9wglGMYDO7FyuxmP73GwSczwZAdEZC5jGMBUmYFkqQ8UPsGZAI8E2W87Tr08VxOrROEDT4oXyF2GiiLx4owKOyBXplI7u2aoP4LYquyjQNv2ZAgDMJoeAvrkZC5KBZC6R6ZA3L9cRm754zpbz8ZC783lvdZBcJLf7G2x8dp9beGsZAjZB8T6jhMZBC2Rng2rafaVTuOCrh", // 🔥 reemplazar
+  email: "lucjuarez@msn.com"
+};
 
 // 🧪 TEST
 app.get("/", (req, res) => {
   res.send("🚨 AdsAlert funcionando");
 });
 
-// 🔍 ENDPOINT
+// 🔍 ENDPOINT MANUAL (usa primera cuenta activa)
 app.get("/check", async (req, res) => {
   try {
-    const acc = accounts[0];
+    const accounts = await getAdAccounts(config.token);
 
-    const data = await getInsights(acc.account_id, acc.token);
+    if (accounts.length === 0) {
+      return res.json({ error: "No hay cuentas disponibles" });
+    }
+
+    const acc = accounts[0];
+    const accountId = acc.id.replace("act_", "");
+
+    const data = await getInsights(accountId, config.token);
     const alert = checkAlerts(data);
 
-    res.json({ data, alert });
+    res.json({
+      account: acc.name,
+      data,
+      alert
+    });
 
   } catch (error) {
     res.json({
@@ -116,57 +51,61 @@ app.get("/check", async (req, res) => {
   }
 });
 
-// 📩 TEST EMAIL
-app.get("/test-email", async (req, res) => {
+// 🔥 CRON AUTOMÁTICO (cada 10 min)
+cron.schedule("*/10 * * * *", async () => {
+  console.log("⏰ Ejecutando monitoreo...");
+
   try {
-    await sendEmail({
-      message: "🚨 Esto es una prueba de AdsAlert",
-      email: "lucjuarez@msn.com"
-    });
+    const accounts = await getAdAccounts(config.token);
 
-    res.send("Email enviado");
-  } catch (error) {
-    console.log(error);
-    res.send("Error enviando email");
-  }
-});
+    for (let acc of accounts) {
+      try {
+        const accountId = acc.id.replace("act_", "");
 
-// 🔥 CRON (cada minuto para test)
-cron.schedule("* * * * *", async () => {
-  console.log("⏰ Ejecutando monitoreo automático...");
+        // 🔥 FILTRO: solo cuentas con campañas activas
+        const active = await hasActiveCampaigns(accountId, config.token);
 
-  for (let acc of accounts) {
-    try {
-      const data = await getInsights(acc.account_id, acc.token);
-      const alert = checkAlerts(data);
-
-      console.log(`📊 ${acc.name}`, data);
-      console.log(`🚨 ${acc.name}`, alert);
-
-      const prev = lastStatus[acc.account_id];
-
-      if (alert.type !== prev) {
-        lastStatus[acc.account_id] = alert.type;
-
-        if (alert.type === "warning" || alert.type === "critical") {
-          await sendEmail({
-            message: `${acc.name}: ${alert.message}`,
-            email: acc.email
-          });
-
-          console.log(`📩 Email enviado a ${acc.email}`);
+        if (!active) {
+          console.log(`⏭️ ${acc.name} sin campañas activas`);
+          continue;
         }
-      }
 
-    } catch (error) {
-      console.log(`❌ Error en ${acc.name}:`, error.message);
+        const data = await getInsights(accountId, config.token);
+        const alert = checkAlerts(data);
+
+        console.log(`📊 ${acc.name}`, data);
+        console.log(`🚨 ${acc.name}`, alert);
+
+        const prev = lastStatus[acc.id];
+
+        // 🧠 SOLO SI CAMBIA EL ESTADO
+        if (alert.type !== prev) {
+          lastStatus[acc.id] = alert.type;
+
+          if (alert.type === "warning" || alert.type === "critical") {
+            await sendEmail({
+              message: `${acc.name}: ${alert.message}`,
+              email: config.email
+            });
+
+            console.log(`📩 Email enviado: ${acc.name}`);
+          }
+        }
+
+      } catch (error) {
+        console.log(`❌ Error en ${acc.name}:`, error.message);
+      }
     }
+
+  } catch (error) {
+    console.log("❌ Error general:", error.message);
   }
+
 });
 
-// 🚀 SERVER (IMPORTANTE PARA RENDER)
+// 🚀 SERVER (Render compatible)
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  console.log(`🚀 AdsAlert corriendo en puerto ${PORT}`);
 });
