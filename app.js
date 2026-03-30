@@ -12,49 +12,50 @@ app.use(express.json());
 // ==========================================
 // 📩 MÓDULO DE EMAIL (Configuración Puerto 587)
 // ==========================================
-// Usamos el puerto 587 para evitar el bloqueo de red ETIMEDOUT detectado
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "mail.lucianojuarez.com.ar",
   port: parseInt(process.env.SMTP_PORT) || 587,
-  secure: false, // false para puerto 587 (usa STARTTLS)
+  secure: false, 
   auth: {
     user: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false, // Permite certificados del hosting sin bloquear la conexión
+    rejectUnauthorized: false,
     minVersion: "TLSv1.2"
-  }
+  },
+  connectionTimeout: 20000, // 20 segundos
+  greetingTimeout: 20000
 });
 
-// Verificador de conexión al arrancar el servidor (aparecerá en logs de Render)
+// Verificador de conexión al arrancar
 transporter.verify((error, success) => {
   if (error) {
-    console.error("❌ ERROR DE CONEXIÓN SMTP:", error.message);
+    console.error("❌ ERROR SMTP AL ARRANCAR:", error.message);
   } else {
-    console.log("✅ Conexión con el servidor de correo establecida con éxito.");
+    console.log("✅ CONEXIÓN SMTP ESTABLECIDA: El servidor de mail está listo.");
   }
 });
 
 async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificación" }) {
-  console.log(`--- Iniciando intento de envío a: ${email} ---`);
+  console.log(`--- Intentando enviar email a: ${email} ---`);
   try {
     const info = await transporter.sendMail({
-      from: `"AdsAlert Global" <${process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar"}>`,
+      from: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
       to: email,
       subject: subject,
       text: message
     });
-    console.log("✅ Email enviado con éxito. Respuesta:", info.response);
+    console.log("✅ EMAIL ENVIADO CON ÉXITO:", info.response);
   } catch (error) {
-    console.error("❌ ERROR EN EL ENVÍO:", error.message);
+    console.error("❌ FALLO FINAL EN EL ENVÍO:", error.message);
   }
 }
 
 // ==========================================
 // 📊 MÓDULO META (Extracción de Datos)
 // ==========================================
-async function getAccountInsights(accountId, token) {
+async function getAccountInsights(accountId, token, accountName) {
   try {
     const res = await axios.get(
       `https://graph.facebook.com/v19.0/${accountId}/insights`,
@@ -63,7 +64,9 @@ async function getAccountInsights(accountId, token) {
     const data = res.data.data[0] || {};
     const spend = parseFloat(data.spend || 0);
     
-    // Si la cuenta no gastó nada en los últimos 7 días, no la auditamos
+    // Log de progreso para que veas que el sistema NO está trabado
+    console.log(`🔎 Procesada: ${accountName} | Gasto: $${spend}`);
+
     if (spend === 0) return null;
 
     const impressions = parseFloat(data.impressions || 0);
@@ -73,7 +76,6 @@ async function getAccountInsights(accountId, token) {
     let totalResults = 0;
     if (data.actions) {
       data.actions.forEach(a => {
-        // Filtro para Compras, Leads y Mensajes
         if (a.action_type.includes("purchase") || a.action_type.includes("lead") || a.action_type.includes("messaging")) {
           totalResults += (parseInt(a.value) || 0);
         }
@@ -83,39 +85,40 @@ async function getAccountInsights(accountId, token) {
     const ctr = impressions > 0 ? ((clicks / impressions) * 100).toFixed(2) : 0;
     const cpr = totalResults > 0 ? (spend / totalResults).toFixed(2) : 0;
 
-    return { spend, totalResults, cpr, ctr, frequency: frequency.toFixed(2) };
-  } catch (error) { return null; }
+    return { name: accountName, spend, totalResults, cpr, ctr, frequency: frequency.toFixed(2) };
+  } catch (error) { 
+    return null; 
+  }
 }
 
 // ==========================================
-// 🚀 ESCANEO INMEDIATO (Reporte de Bienvenida)
+// 🚀 ESCANEO INMEDIATO (Reporte de Activación)
 // ==========================================
 async function runInitialScan(userConfig) {
-  console.log("🚀 Ejecutando auditoría inmediata para:", userConfig.email);
+  console.log("🚀 Iniciando auditoría inmediata. Preparando procesamiento paralelo...");
   try {
     const accountsRes = await axios.get(
       `https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${userConfig.token}`
     );
     const accounts = accountsRes.data.data || [];
-    let reporteList = [];
+    
+    // Procesamos todas las cuentas en paralelo para que el reporte no tarde siglos
+    const promises = accounts
+      .filter(acc => acc.account_status === 1)
+      .map(acc => getAccountInsights(`act_${acc.account_id}`, userConfig.token, acc.name));
 
-    for (let acc of accounts) {
-      if (acc.account_status !== 1) continue; // Solo cuentas activas
-      const accountId = `act_${acc.account_id}`;
-      const metrics = await getAccountInsights(accountId, userConfig.token);
-      
-      if (metrics) {
-        reporteList.push(`📌 ${acc.name}\nGastado: $${metrics.spend} | CPA: $${metrics.cpr} | CTR: ${metrics.ctr}% | Freq: ${metrics.frequency}\n`);
-      }
-    }
+    const results = await Promise.all(promises);
+    const activeResults = results.filter(r => r !== null);
 
-    let msg = `¡Hola!\n\nAdsAlert se ha conectado exitosamente a tu Business Manager.\n\nEste es tu reporte de activación inmediata con las cuentas que están corriendo ahora:\n\n`;
+    let reporteList = activeResults.map(r => `📌 ${r.name}\nGastado: $${r.spend} | CPA: $${r.cpr} | CTR: ${r.ctr}% | Freq: ${r.frequency}\n`);
+
+    let msg = `¡Hola!\n\nAdsAlert se ha conectado exitosamente.\n\nEste es tu reporte de activación con el estado de tus cuentas activas:\n\n`;
     if (reporteList.length > 0) {
       msg += reporteList.join('\n');
     } else {
-      msg += "No se detectó inversión en los últimos 7 días en tus cuentas activas.\n";
+      msg += "No se detectaron cuentas con inversión activa en los últimos 7 días.\n";
     }
-    msg += `\nEl motor de AdsAlert ahora vigilará estos indicadores 24/7 de forma automática.\n\nSaludos,\nAdsAlert`;
+    msg += `\nEl motor de AdsAlert ahora vigilará estos indicadores 24/7.\n\nSaludos,\nAdsAlert`;
 
     await sendEmail({ email: userConfig.email, subject: "✅ AdsAlert: Auditoría Activada", message: msg });
   } catch(e) {
@@ -138,17 +141,17 @@ app.post("/save-config", (req, res) => {
 
   res.json({ status: "OK" });
 
-  // Disparo inmediato del reporte por correo
+  // Ejecución en segundo plano
   runInitialScan(config);
 });
 
-app.get("/health", (req, res) => res.send("🚀 AdsAlert Backend OK"));
+app.get("/health", (req, res) => res.send("🚀 Backend AdsAlert OK"));
 
 // ==========================================
-// ⏰ MÓDULO CRON (Vigilancia cada 5 minutos)
+// ⏰ MÓDULO CRON (Vigilancia cada 5 min)
 // ==========================================
 cron.schedule("*/5 * * * *", async () => {
-  console.log("⏰ Revisando portafolios multicuenta...");
+  console.log("⏰ Revisando portafolios...");
   for (let user of users) {
     try {
       const accountsRes = await axios.get(`https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${user.token}`);
@@ -157,20 +160,19 @@ cron.schedule("*/5 * * * *", async () => {
 
       for (let acc of accounts) {
         if (acc.account_status !== 1) continue;
-        const metrics = await getAccountInsights(`act_${acc.account_id}`, user.token);
+        const metrics = await getAccountInsights(`act_${acc.account_id}`, user.token, acc.name);
         if (!metrics) continue;
 
-        // Evaluación de reglas de alerta solicitadas
         let problemas = [];
         if (metrics.ctr > 0 && metrics.ctr < 1) problemas.push(`CTR bajo (${metrics.ctr}%)`);
         if (metrics.frequency > 3) problemas.push(`Frecuencia alta (${metrics.frequency})`);
-        if (metrics.spend > 0 && metrics.totalResults === 0) problemas.push(`Gasto sin resultados registrados.`);
+        if (metrics.spend > 0 && metrics.totalResults === 0) problemas.push(`Gasto sin resultados.`);
 
         if (user.alerts && problemas.length > 0) {
           await sendEmail({
             email: user.email,
             subject: `🚨 ALERTA: ${acc.name}`,
-            message: `Atención en la cuenta "${acc.name}":\n${problemas.join('\n')}\nCPA actual: $${metrics.cpr}`
+            message: `Atención en "${acc.name}":\n${problemas.join('\n')}\nCPA actual: $${metrics.cpr}`
           });
         }
         reporteDiarioCuentas.push(`📌 ${acc.name}\nCPA: $${metrics.cpr} | CTR: ${metrics.ctr}%`);
@@ -178,17 +180,15 @@ cron.schedule("*/5 * * * *", async () => {
 
       const now = new Date();
       const hourStr = now.toTimeString().slice(0,5);
-      // Reporte diario a las 08:00 AM
       if (user.daily && user.hour === hourStr && user.lastReport !== hourStr) {
         user.lastReport = hourStr;
         if (reporteDiarioCuentas.length > 0) {
-          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Este es el estado de tu portafolio hoy:\n\n${reporteDiarioCuentas.join('\n\n')}` });
+          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Este es el estado de tu portafolio:\n\n${reporteDiarioCuentas.join('\n\n')}` });
         }
       }
     } catch (e) { console.error("❌ Error en ciclo Cron:", e.message); }
   }
 });
 
-// El puerto se lee de la variable de entorno de Render
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 AdsAlert corriendo en puerto ${PORT}`));
