@@ -10,48 +10,43 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 📩 MÓDULO DE EMAIL (Configuración de Alta Compatibilidad)
+// 📩 MÓDULO DE EMAIL (AJUSTADO PARA PUERTO 587)
 // ==========================================
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "mail.lucianojuarez.com.ar",
-  port: parseInt(process.env.SMTP_PORT) || 465,
-  secure: true, 
+  port: parseInt(process.env.SMTP_PORT) || 587, // Cambiado a 587 para evitar el ETIMEDOUT
+  secure: false, // false para puerto 587 (usa STARTTLS)
   auth: {
     user: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false, // Ignora certificados no verificados
-    minVersion: "TLSv1.2"      // Fuerza una versión de TLS compatible
-  },
-  connectionTimeout: 10000,    // 10 segundos de espera
-  greetingTimeout: 10000
+    rejectUnauthorized: false, // Permite certificados del hosting
+    minVersion: "TLSv1.2"
+  }
 });
 
-// 🔥 VERIFICADOR DE ARRANQUE (Aparecerá en los Logs de Render)
+// Verificador de conexión al arrancar
 transporter.verify((error, success) => {
   if (error) {
-    console.error("❌ ERROR CRÍTICO: El servidor de correo NO responde al logueo:");
-    console.error(error);
+    console.error("❌ ERROR DE CONEXIÓN SMTP:", error.message);
   } else {
-    console.log("✅ ÉXITO: El servidor está listo para enviar correos desde AdsAlert.");
+    console.log("✅ Servidor listo para enviar correos.");
   }
 });
 
 async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificación" }) {
-  console.log(`--- Iniciando intento de envío a: ${email} ---`);
+  console.log(`--- Intentando enviar email a: ${email} ---`);
   try {
     const info = await transporter.sendMail({
-      from: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
+      from: `"AdsAlert Global" <${process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar"}>`,
       to: email,
       subject: subject,
       text: message
     });
-    console.log("✅ RESPUESTA POSITIVA DEL SERVIDOR:", info.response);
+    console.log("✅ Email enviado con éxito. Respuesta:", info.response);
   } catch (error) {
-    console.error("❌ ERROR EN EL PROCESO DE ENVÍO:");
-    console.error("Mensaje:", error.message);
-    console.error("Código:", error.code);
+    console.error("❌ ERROR EN EL ENVÍO:", error.message);
   }
 }
 
@@ -89,10 +84,10 @@ async function getAccountInsights(accountId, token) {
 }
 
 // ==========================================
-// 🚀 ESCANEO INMEDIATO (El Reporte que debe llegar)
+// 🚀 ESCANEO INMEDIATO (El Reporte Inmediato)
 // ==========================================
 async function runInitialScan(userConfig) {
-  console.log("🚀 Ejecutando escaneo inmediato para:", userConfig.email);
+  console.log("🚀 Iniciando auditoría inmediata para:", userConfig.email);
   try {
     const accountsRes = await axios.get(
       `https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${userConfig.token}`
@@ -116,11 +111,11 @@ async function runInitialScan(userConfig) {
     } else {
       msg += "No se detectó inversión en los últimos 7 días en tus cuentas activas.\n";
     }
-    msg += `\nEl motor de AdsAlert ahora vigilará estos indicadores 24/7.\n\nSaludos,\nAdsAlert`;
+    msg += `\nEl motor de AdsAlert ahora vigilará estos indicadores 24/7 de forma automática.\n\nSaludos,\nAdsAlert`;
 
     await sendEmail({ email: userConfig.email, subject: "✅ AdsAlert: Auditoría Activada", message: msg });
   } catch(e) {
-    console.error("❌ Error en runInitialScan:", e.message);
+    console.error("❌ Error en escaneo inicial:", e.message);
   }
 }
 
@@ -139,10 +134,11 @@ app.post("/save-config", (req, res) => {
 
   res.json({ status: "OK" });
 
+  // Ejecución en segundo plano
   runInitialScan(config);
 });
 
-app.get("/health", (req, res) => res.send("🚀 Backend AdsAlert OK"));
+app.get("/health", (req, res) => res.send("🚀 AdsAlert Backend OK"));
 
 // ==========================================
 // ⏰ MÓDULO CRON (Vigilancia 24/7)
@@ -180,7 +176,7 @@ cron.schedule("*/5 * * * *", async () => {
       if (user.daily && user.hour === hourStr && user.lastReport !== hourStr) {
         user.lastReport = hourStr;
         if (reporteDiarioCuentas.length > 0) {
-          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Estado actual:\n\n${reporteDiarioCuentas.join('\n\n')}` });
+          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Resumen de tu portafolio:\n\n${reporteDiarioCuentas.join('\n\n')}` });
         }
       }
     } catch (e) { console.error("❌ Error Cron:", e.message); }
