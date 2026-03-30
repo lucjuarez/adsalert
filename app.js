@@ -1,39 +1,50 @@
 const express = require("express");
 const cors = require("cors");
+const cron = require("node-cron");
 
 const { getInsights, getAdAccounts, hasActiveCampaigns } = require("./meta");
 const { checkAlerts } = require("./alerts");
+const { sendEmail } = require("./email");
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
-// TEST
-app.get("/", (req, res) => {
-  res.send("AdsAlert funcionando");
+let users = [];
+
+// 🧠 GUARDAR CONFIG
+app.post("/save-config", (req, res) => {
+
+  const { token, email, hour, alerts } = req.body;
+
+  users.push({
+    token,
+    email,
+    hour,
+    alerts,
+    lastReport: null
+  });
+
+  res.send("OK");
 });
 
-// 🔥 ENDPOINT MULTIUSUARIO
+// 🔍 CHECK
 app.get("/check", async (req, res) => {
   try {
 
     const token = req.query.token;
-
-    if (!token) {
-      return res.json({ error: "Token requerido" });
-    }
-
     const accounts = await getAdAccounts(token);
 
     let results = [];
 
     for (let acc of accounts) {
 
-      const accountId = acc.account_id;
+      const id = acc.account_id;
 
-      const active = await hasActiveCampaigns(accountId, token);
+      const active = await hasActiveCampaigns(id, token);
       if (!active) continue;
 
-      const data = await getInsights(accountId, token);
+      const data = await getInsights(id, token);
       if (data.spend < 1) continue;
 
       const alert = checkAlerts(data);
@@ -47,14 +58,95 @@ app.get("/check", async (req, res) => {
 
     res.json(results);
 
-  } catch (error) {
-    console.log(error);
-    res.json({ error: error.message });
+  } catch (e) {
+    res.json({ error: e.message });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// 🔥 CRON INTELIGENTE
+cron.schedule("* * * * *", async () => {
 
-app.listen(PORT, () => {
-  console.log("Servidor corriendo en puerto " + PORT);
+  const now = new Date();
+  const currentHour = now.toTimeString().slice(0,5);
+
+  for (let user of users) {
+
+    try {
+
+      const accounts = await getAdAccounts(user.token);
+      let report = [];
+
+      for (let acc of accounts) {
+
+        const id = acc.account_id;
+
+        const active = await hasActiveCampaigns(id, user.token);
+        if (!active) continue;
+
+        const data = await getInsights(id, user.token);
+        if (data.spend < 1) continue;
+
+        const alert = checkAlerts(data);
+
+        report.push({ name: acc.name, data, alert });
+
+        // 🚨 ALERTA CRÍTICA
+        if (alert.type === "critical" && user.alerts) {
+          await sendEmail({
+            email: user.email,
+            message: `🚨 ${acc.name}: ${alert.message}`
+          });
+        }
+      }
+
+      // 📊 REPORTE DIARIO
+      if (user.hour === currentHour && user.lastReport !== currentHour) {
+
+        user.lastReport = currentHour;
+
+        let message = "📊 REPORTE DIARIO:\n\n";
+
+        report.forEach(r => {
+
+          const d = r.data;
+
+          message += `📢 ${r.name}\n`;
+
+          if (d.objective === "purchase") {
+            message += `🛒 Ventas: ${d.results}\n💰 $${d.spend}\nCPA: $${d.cpa.toFixed(2)}\nCTR: ${d.ctr}%\nIMP: ${d.impressions}\nCPM: $${d.cpm}\n\n`;
+          }
+
+          if (d.objective === "lead") {
+            message += `📩 Leads: ${d.results}\n💰 $${d.spend}\nCPL: $${d.cpa.toFixed(2)}\nCTR: ${d.ctr}%\nClicks: ${d.clicks}\nCPC: $${d.cpc.toFixed(2)}\n\n`;
+          }
+
+          if (d.objective === "message") {
+            message += `💬 Mensajes: ${d.results}\n💰 $${d.spend}\nCosto: $${d.cpa.toFixed(2)}\nCTR: ${d.ctr}%\nClicks: ${d.clicks}\nCPC: $${d.cpc.toFixed(2)}\n\n`;
+          }
+
+          if (d.objective === "traffic") {
+            message += `🌐 Visitas: ${d.results}\n💰 $${d.spend}\nCPC: $${d.cpc.toFixed(2)}\nCTR: ${d.ctr}%\nIMP: ${d.impressions}\nCPM: $${d.cpm}\n\n`;
+          }
+
+          message += "----------------------\n";
+        });
+
+        await sendEmail({
+          email: user.email,
+          message
+        });
+
+        console.log("📩 Reporte enviado");
+      }
+
+    } catch (e) {
+      console.log("error", e.message);
+    }
+
+  }
+
 });
+
+// SERVER
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("🚀 Running " + PORT));

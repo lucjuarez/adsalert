@@ -1,31 +1,18 @@
 function checkAlerts(data) {
-  const { spend, results } = data;
 
-  if (spend === 0 && results === 0) {
-    return {
-      type: "warning",
-      message: "⚠️ No hay actividad en la cuenta (campañas pausadas o sin presupuesto)"
-    };
+  if (data.spend === 0) {
+    return { type: "warning", message: "Sin inversión activa" };
   }
 
-  if (spend > 0 && results === 0) {
-    return {
-      type: "critical",
-      message: "🚨 Estás gastando dinero sin obtener resultados"
-    };
+  if (data.results === 0) {
+    return { type: "critical", message: "Gasta sin resultados" };
   }
 
-  if (spend > 0 && results > 0) {
-    return {
-      type: "ok",
-      message: "✅ Tus campañas están funcionando correctamente"
-    };
+  if (data.cpa > 50 && data.objective !== "traffic") {
+    return { type: "warning", message: "CPA elevado" };
   }
 
-  return {
-    type: "info",
-    message: "ℹ️ Sin datos suficientes"
-  };
+  return { type: "ok", message: "Funcionando correctamente" };
 }
 
 module.exports = { checkAlerts };
