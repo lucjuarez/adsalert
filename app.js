@@ -12,6 +12,7 @@ app.use(express.json());
 // ==========================================
 // 📩 MÓDULO DE EMAIL (Configuración Puerto 587)
 // ==========================================
+// Usamos el puerto 587 para evitar el bloqueo de red ETIMEDOUT detectado
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "mail.lucianojuarez.com.ar",
   port: parseInt(process.env.SMTP_PORT) || 587,
@@ -21,12 +22,12 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false, // Permite certificados del hosting
+    rejectUnauthorized: false, // Permite certificados del hosting sin bloquear la conexión
     minVersion: "TLSv1.2"
   }
 });
 
-// Verificador de conexión al arrancar el servidor
+// Verificador de conexión al arrancar el servidor (aparecerá en logs de Render)
 transporter.verify((error, success) => {
   if (error) {
     console.error("❌ ERROR DE CONEXIÓN SMTP:", error.message);
@@ -72,6 +73,7 @@ async function getAccountInsights(accountId, token) {
     let totalResults = 0;
     if (data.actions) {
       data.actions.forEach(a => {
+        // Filtro para Compras, Leads y Mensajes
         if (a.action_type.includes("purchase") || a.action_type.includes("lead") || a.action_type.includes("messaging")) {
           totalResults += (parseInt(a.value) || 0);
         }
@@ -98,7 +100,7 @@ async function runInitialScan(userConfig) {
     let reporteList = [];
 
     for (let acc of accounts) {
-      if (acc.account_status !== 1) continue;
+      if (acc.account_status !== 1) continue; // Solo cuentas activas
       const accountId = `act_${acc.account_id}`;
       const metrics = await getAccountInsights(accountId, userConfig.token);
       
@@ -136,7 +138,7 @@ app.post("/save-config", (req, res) => {
 
   res.json({ status: "OK" });
 
-  // Disparo del reporte por mail
+  // Disparo inmediato del reporte por correo
   runInitialScan(config);
 });
 
@@ -158,6 +160,7 @@ cron.schedule("*/5 * * * *", async () => {
         const metrics = await getAccountInsights(`act_${acc.account_id}`, user.token);
         if (!metrics) continue;
 
+        // Evaluación de reglas de alerta solicitadas
         let problemas = [];
         if (metrics.ctr > 0 && metrics.ctr < 1) problemas.push(`CTR bajo (${metrics.ctr}%)`);
         if (metrics.frequency > 3) problemas.push(`Frecuencia alta (${metrics.frequency})`);
@@ -175,6 +178,7 @@ cron.schedule("*/5 * * * *", async () => {
 
       const now = new Date();
       const hourStr = now.toTimeString().slice(0,5);
+      // Reporte diario a las 08:00 AM
       if (user.daily && user.hour === hourStr && user.lastReport !== hourStr) {
         user.lastReport = hourStr;
         if (reporteDiarioCuentas.length > 0) {
@@ -185,5 +189,6 @@ cron.schedule("*/5 * * * *", async () => {
   }
 });
 
+// El puerto se lee de la variable de entorno de Render
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 AdsAlert corriendo en puerto ${PORT}`));
