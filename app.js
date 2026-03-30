@@ -10,11 +10,11 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 📩 MÓDULO DE EMAIL (AJUSTADO PARA PUERTO 587)
+// 📩 MÓDULO DE EMAIL (Configuración Puerto 587)
 // ==========================================
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "mail.lucianojuarez.com.ar",
-  port: parseInt(process.env.SMTP_PORT) || 587, // Cambiado a 587 para evitar el ETIMEDOUT
+  port: parseInt(process.env.SMTP_PORT) || 587,
   secure: false, // false para puerto 587 (usa STARTTLS)
   auth: {
     user: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
@@ -26,17 +26,17 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Verificador de conexión al arrancar
+// Verificador de conexión al arrancar el servidor
 transporter.verify((error, success) => {
   if (error) {
     console.error("❌ ERROR DE CONEXIÓN SMTP:", error.message);
   } else {
-    console.log("✅ Servidor listo para enviar correos.");
+    console.log("✅ Conexión con el servidor de correo establecida con éxito.");
   }
 });
 
 async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificación" }) {
-  console.log(`--- Intentando enviar email a: ${email} ---`);
+  console.log(`--- Iniciando intento de envío a: ${email} ---`);
   try {
     const info = await transporter.sendMail({
       from: `"AdsAlert Global" <${process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar"}>`,
@@ -61,6 +61,8 @@ async function getAccountInsights(accountId, token) {
     );
     const data = res.data.data[0] || {};
     const spend = parseFloat(data.spend || 0);
+    
+    // Si la cuenta no gastó nada en los últimos 7 días, no la auditamos
     if (spend === 0) return null;
 
     const impressions = parseFloat(data.impressions || 0);
@@ -84,10 +86,10 @@ async function getAccountInsights(accountId, token) {
 }
 
 // ==========================================
-// 🚀 ESCANEO INMEDIATO (El Reporte Inmediato)
+// 🚀 ESCANEO INMEDIATO (Reporte de Bienvenida)
 // ==========================================
 async function runInitialScan(userConfig) {
-  console.log("🚀 Iniciando auditoría inmediata para:", userConfig.email);
+  console.log("🚀 Ejecutando auditoría inmediata para:", userConfig.email);
   try {
     const accountsRes = await axios.get(
       `https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${userConfig.token}`
@@ -105,7 +107,7 @@ async function runInitialScan(userConfig) {
       }
     }
 
-    let msg = `¡Hola!\n\nAdsAlert se ha conectado exitosamente.\n\nEste es tu reporte de activación inmediata:\n\n`;
+    let msg = `¡Hola!\n\nAdsAlert se ha conectado exitosamente a tu Business Manager.\n\nEste es tu reporte de activación inmediata con las cuentas que están corriendo ahora:\n\n`;
     if (reporteList.length > 0) {
       msg += reporteList.join('\n');
     } else {
@@ -134,17 +136,17 @@ app.post("/save-config", (req, res) => {
 
   res.json({ status: "OK" });
 
-  // Ejecución en segundo plano
+  // Disparo del reporte por mail
   runInitialScan(config);
 });
 
 app.get("/health", (req, res) => res.send("🚀 AdsAlert Backend OK"));
 
 // ==========================================
-// ⏰ MÓDULO CRON (Vigilancia 24/7)
+// ⏰ MÓDULO CRON (Vigilancia cada 5 minutos)
 // ==========================================
 cron.schedule("*/5 * * * *", async () => {
-  console.log("⏰ Revisando portafolios...");
+  console.log("⏰ Revisando portafolios multicuenta...");
   for (let user of users) {
     try {
       const accountsRes = await axios.get(`https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${user.token}`);
@@ -159,13 +161,13 @@ cron.schedule("*/5 * * * *", async () => {
         let problemas = [];
         if (metrics.ctr > 0 && metrics.ctr < 1) problemas.push(`CTR bajo (${metrics.ctr}%)`);
         if (metrics.frequency > 3) problemas.push(`Frecuencia alta (${metrics.frequency})`);
-        if (metrics.spend > 0 && metrics.totalResults === 0) problemas.push(`Gasto sin resultados.`);
+        if (metrics.spend > 0 && metrics.totalResults === 0) problemas.push(`Gasto sin resultados registrados.`);
 
         if (user.alerts && problemas.length > 0) {
           await sendEmail({
             email: user.email,
             subject: `🚨 ALERTA: ${acc.name}`,
-            message: `Problemas detectados:\n${problemas.join('\n')}\nCPA: $${metrics.cpr}`
+            message: `Atención en la cuenta "${acc.name}":\n${problemas.join('\n')}\nCPA actual: $${metrics.cpr}`
           });
         }
         reporteDiarioCuentas.push(`📌 ${acc.name}\nCPA: $${metrics.cpr} | CTR: ${metrics.ctr}%`);
@@ -176,10 +178,10 @@ cron.schedule("*/5 * * * *", async () => {
       if (user.daily && user.hour === hourStr && user.lastReport !== hourStr) {
         user.lastReport = hourStr;
         if (reporteDiarioCuentas.length > 0) {
-          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Resumen de tu portafolio:\n\n${reporteDiarioCuentas.join('\n\n')}` });
+          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Este es el estado de tu portafolio hoy:\n\n${reporteDiarioCuentas.join('\n\n')}` });
         }
       }
-    } catch (e) { console.error("❌ Error Cron:", e.message); }
+    } catch (e) { console.error("❌ Error en ciclo Cron:", e.message); }
   }
 });
 
