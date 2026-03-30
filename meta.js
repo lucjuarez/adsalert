@@ -1,30 +1,12 @@
 const axios = require("axios");
 
-// 📊 INSIGHTS META
-async function getInsights(accountId, token) {
+// 🔥 CONSTRUIR RESULTADOS POR TIPO
+function buildResults(data) {
 
-  const url = `https://graph.facebook.com/v19.0/${accountId}/insights`;
-
-  const res = await axios.get(url, {
-    params: {
-      fields: "spend,impressions,clicks,actions,frequency",
-      date_preset: "last_7d",
-      access_token: token
-    }
-  });
-
-  const data = res.data.data[0] || {};
-
-  const spend = parseFloat(data.spend || 0);
-  const impressions = parseFloat(data.impressions || 0);
-  const clicks = parseFloat(data.clicks || 0);
-  const frequency = parseFloat(data.frequency || 0);
-
-  // 🔥 RESULTADOS POR TIPO (CLAVE)
-  let results = {
-    purchases: 0,
-    leads: 0,
-    messages: 0,
+  let resultTypes = {
+    purchase: 0,
+    lead: 0,
+    message: 0,
     traffic: 0
   };
 
@@ -33,32 +15,94 @@ async function getInsights(accountId, token) {
       const value = parseInt(a.value) || 0;
 
       if (a.action_type.includes("purchase")) {
-        results.purchases += value;
+        resultTypes.purchase += value;
       }
 
       if (a.action_type.includes("lead")) {
-        results.leads += value;
+        resultTypes.lead += value;
       }
 
       if (a.action_type.includes("messaging")) {
-        results.messages += value;
+        resultTypes.message += value;
       }
 
       if (a.action_type.includes("landing_page_view")) {
-        results.traffic += value;
+        resultTypes.traffic += value;
       }
     });
   }
 
-  // 🎯 RESULTADO PRINCIPAL (prioridad tipo MetaReport)
-  const mainResult =
-    results.purchases ||
-    results.leads ||
-    results.messages ||
-    results.traffic ||
-    0;
+  return resultTypes;
+}
 
-  const cpa = mainResult > 0 ? spend / mainResult : 0;
+// 🔥 ARMAR BLOQUES POR OBJETIVO
+function buildObjectiveData(results, spend) {
+
+  let output = [];
+
+  if (results.purchase > 0) {
+    output.push({
+      type: "purchase",
+      label: "🛒 Compras",
+      results: results.purchase,
+      cost: spend / results.purchase
+    });
+  }
+
+  if (results.lead > 0) {
+    output.push({
+      type: "lead",
+      label: "📩 Leads",
+      results: results.lead,
+      cost: spend / results.lead
+    });
+  }
+
+  if (results.message > 0) {
+    output.push({
+      type: "message",
+      label: "💬 Mensajes",
+      results: results.message,
+      cost: spend / results.message
+    });
+  }
+
+  if (results.traffic > 0) {
+    output.push({
+      type: "traffic",
+      label: "🌐 Tráfico",
+      results: results.traffic,
+      cost: spend / results.traffic
+    });
+  }
+
+  return output;
+}
+
+// 📊 INSIGHTS
+async function getInsights(accountId, token) {
+
+  const res = await axios.get(
+    `https://graph.facebook.com/v19.0/${accountId}/insights`,
+    {
+      params: {
+        fields: "spend,impressions,clicks,actions,frequency",
+        date_preset: "last_7d",
+        access_token: token
+      }
+    }
+  );
+
+  const data = res.data.data[0] || {};
+
+  const spend = parseFloat(data.spend || 0);
+  const impressions = parseFloat(data.impressions || 0);
+  const clicks = parseFloat(data.clicks || 0);
+  const frequency = parseFloat(data.frequency || 0);
+
+  // 🔥 RESULTADOS MULTI
+  const results = buildResults(data);
+  const objectives = buildObjectiveData(results, spend);
 
   // 📈 MÉTRICAS
   const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
@@ -67,9 +111,7 @@ async function getInsights(accountId, token) {
 
   return {
     spend,
-    results,
-    mainResult,
-    cpa,
+    objectives,
     ctr: parseFloat(ctr.toFixed(2)),
     cpc: parseFloat(cpc.toFixed(2)),
     cpm: parseFloat(cpm.toFixed(2)),
@@ -80,50 +122,29 @@ async function getInsights(accountId, token) {
 // 🚨 ALERTAS
 function checkAlerts(data) {
 
-  if (data.spend === 0 && data.mainResult === 0) {
-    return { type: "warning", message: "⚠️ Sin actividad" };
+  if (data.spend === 0) {
+    return { type: "warning", message: "⚠️ Sin inversión" };
   }
 
-  if (data.spend > 0 && data.mainResult === 0) {
-    return { type: "critical", message: "🚨 Gastando sin resultados" };
+  if (data.objectives.length === 0) {
+    return { type: "critical", message: "🚨 Sin resultados" };
   }
 
-  return { type: "ok", message: "✅ Campañas funcionando" };
+  return { type: "ok", message: "✅ Funcionando" };
 }
 
-// 🧠 INSIGHTS
-function generateInsights(current, previous) {
+// 🧠 INSIGHTS PRO
+function generateInsights(data) {
 
   let insights = [];
 
-  // CTR
-  if (current.ctr < 1) {
-    insights.push("🚨 CTR bajo → creativo débil");
-  } else if (current.ctr < 3) {
-    insights.push("⚠️ CTR normal → mejorar anuncios");
-  } else {
-    insights.push("✅ CTR alto");
-  }
+  if (data.ctr < 1) insights.push("🚨 CTR bajo");
+  else if (data.ctr < 3) insights.push("⚠️ CTR normal");
+  else insights.push("✅ CTR alto");
 
-  // FRECUENCIA
-  if (current.frequency > 3) {
-    insights.push("🚨 Saturación de audiencia");
-  } else if (current.frequency > 2) {
-    insights.push("⚠️ Fatiga en aumento");
-  } else {
-    insights.push("✅ Frecuencia saludable");
-  }
-
-  // COSTOS
-  if (previous && previous.cpa > 0) {
-    if (current.cpa > previous.cpa * 1.2) {
-      insights.push("🚨 Subida de costos");
-    } else if (current.cpa < previous.cpa) {
-      insights.push("✅ Mejora en costos");
-    } else {
-      insights.push("⚠️ Costos estables");
-    }
-  }
+  if (data.frequency > 3) insights.push("🚨 Saturación");
+  else if (data.frequency > 2) insights.push("⚠️ Fatiga");
+  else insights.push("✅ Frecuencia saludable");
 
   return insights;
 }
