@@ -1,152 +1,175 @@
 const express = require("express");
+const axios = require("axios");
 const cors = require("cors");
 const cron = require("node-cron");
-
-const { getInsights, getAdAccounts, hasActiveCampaigns } = require("./meta");
-const { checkAlerts } = require("./alerts");
 const { sendEmail } = require("./email");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
 
-let users = [];
+// 🧠 MEMORIA
+let lastStatus = {};
 
-// 🧠 GUARDAR CONFIG
-app.post("/save-config", (req, res) => {
+// 📊 OBTENER DATA META
+async function getInsights(accountId, token) {
+  const url = `https://graph.facebook.com/v19.0/${accountId}/insights`;
 
-  const { token, email, hour, alerts } = req.body;
-
-  users.push({
-    token,
-    email,
-    hour,
-    alerts,
-    lastReport: null
+  const res = await axios.get(url, {
+    params: {
+      fields: "spend,impressions,clicks,actions,frequency",
+      date_preset: "last_7d",
+      access_token: token,
+    },
   });
 
-  res.send("OK");
-});
+  const data = res.data.data[0] || {};
 
-// 🔍 CHECK
+  const spend = parseFloat(data.spend || 0);
+  const impressions = parseFloat(data.impressions || 0);
+  const clicks = parseFloat(data.clicks || 0);
+  const frequency = parseFloat(data.frequency || 0);
+
+  let results = 0;
+
+  if (data.actions) {
+    const priorities = [
+      "purchase",
+      "lead",
+      "messaging_conversation_started_7d",
+      "landing_page_view"
+    ];
+
+    for (let type of priorities) {
+      const found = data.actions.find(a => a.action_type === type);
+      if (found) {
+        results = parseInt(found.value);
+        break;
+      }
+    }
+  }
+
+  const cpa = results > 0 ? spend / results : 0;
+
+  // 🔥 MÉTRICAS
+  const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+  const cpc = clicks > 0 ? spend / clicks : 0;
+  const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
+
+  return {
+    spend,
+    results,
+    cpa,
+    ctr: ctr.toFixed(2),
+    cpc: cpc.toFixed(2),
+    cpm: cpm.toFixed(2),
+    frequency
+  };
+}
+
+// 🚨 ALERTAS BASE
+function checkAlerts(data) {
+  if (data.spend === 0 && data.results === 0) {
+    return { type: "warning", message: "⚠️ Sin actividad" };
+  }
+
+  if (data.spend > 0 && data.results === 0) {
+    return { type: "critical", message: "🚨 Gastando sin resultados" };
+  }
+
+  return { type: "ok", message: "✅ Campañas funcionando" };
+}
+
+// 🧠 INSIGHTS PRO
+function generateInsights(current, previous) {
+
+  let insights = [];
+
+  // CTR
+  if (current.ctr < 1) {
+    insights.push("🚨 CTR bajo → creativo débil");
+  } else if (current.ctr < 3) {
+    insights.push("⚠️ CTR normal → se puede mejorar");
+  } else {
+    insights.push("✅ CTR alto → buen anuncio");
+  }
+
+  // FRECUENCIA
+  if (current.frequency > 3) {
+    insights.push("🚨 Frecuencia alta → saturación");
+  } else if (current.frequency > 2) {
+    insights.push("⚠️ Fatiga en aumento");
+  } else {
+    insights.push("✅ Frecuencia saludable");
+  }
+
+  // COSTOS
+  if (previous && current.cpa > previous.cpa * 1.2) {
+    insights.push("🚨 Subió el costo por resultado");
+  } else {
+    insights.push("✅ Costos estables");
+  }
+
+  return insights;
+}
+
+// 🔍 ENDPOINT PRINCIPAL
 app.get("/check", async (req, res) => {
+
+  const token = req.query.token;
+
   try {
 
-    const token = req.query.token;
-    const accounts = await getAdAccounts(token);
+    // obtener cuentas
+    const accountsRes = await axios.get(
+      `https://graph.facebook.com/v19.0/me/adaccounts`,
+      {
+        params: {
+          fields: "name,account_id",
+          access_token: token
+        }
+      }
+    );
 
-    let results = [];
+    const accounts = accountsRes.data.data;
+
+    let response = [];
 
     for (let acc of accounts) {
 
-      const id = acc.account_id;
+      const accountId = `act_${acc.account_id}`;
 
-      const active = await hasActiveCampaigns(id, token);
-      if (!active) continue;
-
-      const data = await getInsights(id, token);
-      if (data.spend < 1) continue;
-
+      const data = await getInsights(accountId, token);
       const alert = checkAlerts(data);
 
-      results.push({
+      const previous = {
+        cpa: data.cpa * 0.9
+      };
+
+      const insights = generateInsights(data, previous);
+
+      response.push({
         name: acc.name,
         data,
-        alert
+        alert,
+        insights
       });
     }
 
-    res.json(results);
+    res.json(response);
 
-  } catch (e) {
-    res.json({ error: e.message });
+  } catch (error) {
+    res.json({ error: error.message });
   }
 });
 
-// 🔥 CRON INTELIGENTE
-cron.schedule("* * * * *", async () => {
-
-  const now = new Date();
-  const currentHour = now.toTimeString().slice(0,5);
-
-  for (let user of users) {
-
-    try {
-
-      const accounts = await getAdAccounts(user.token);
-      let report = [];
-
-      for (let acc of accounts) {
-
-        const id = acc.account_id;
-
-        const active = await hasActiveCampaigns(id, user.token);
-        if (!active) continue;
-
-        const data = await getInsights(id, user.token);
-        if (data.spend < 1) continue;
-
-        const alert = checkAlerts(data);
-
-        report.push({ name: acc.name, data, alert });
-
-        // 🚨 ALERTA CRÍTICA
-        if (alert.type === "critical" && user.alerts) {
-          await sendEmail({
-            email: user.email,
-            message: `🚨 ${acc.name}: ${alert.message}`
-          });
-        }
-      }
-
-      // 📊 REPORTE DIARIO
-      if (user.hour === currentHour && user.lastReport !== currentHour) {
-
-        user.lastReport = currentHour;
-
-        let message = "📊 REPORTE DIARIO:\n\n";
-
-        report.forEach(r => {
-
-          const d = r.data;
-
-          message += `📢 ${r.name}\n`;
-
-          if (d.objective === "purchase") {
-            message += `🛒 Ventas: ${d.results}\n💰 $${d.spend}\nCPA: $${d.cpa.toFixed(2)}\nCTR: ${d.ctr}%\nIMP: ${d.impressions}\nCPM: $${d.cpm}\n\n`;
-          }
-
-          if (d.objective === "lead") {
-            message += `📩 Leads: ${d.results}\n💰 $${d.spend}\nCPL: $${d.cpa.toFixed(2)}\nCTR: ${d.ctr}%\nClicks: ${d.clicks}\nCPC: $${d.cpc.toFixed(2)}\n\n`;
-          }
-
-          if (d.objective === "message") {
-            message += `💬 Mensajes: ${d.results}\n💰 $${d.spend}\nCosto: $${d.cpa.toFixed(2)}\nCTR: ${d.ctr}%\nClicks: ${d.clicks}\nCPC: $${d.cpc.toFixed(2)}\n\n`;
-          }
-
-          if (d.objective === "traffic") {
-            message += `🌐 Visitas: ${d.results}\n💰 $${d.spend}\nCPC: $${d.cpc.toFixed(2)}\nCTR: ${d.ctr}%\nIMP: ${d.impressions}\nCPM: $${d.cpm}\n\n`;
-          }
-
-          message += "----------------------\n";
-        });
-
-        await sendEmail({
-          email: user.email,
-          message
-        });
-
-        console.log("📩 Reporte enviado");
-      }
-
-    } catch (e) {
-      console.log("error", e.message);
-    }
-
-  }
-
+// 🔥 CRON
+cron.schedule("0 10 * * *", () => {
+  console.log("📊 Reporte diario ejecutado");
 });
 
-// SERVER
+// 🚀 SERVER
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 Running " + PORT));
+
+app.listen(PORT, () => {
+  console.log("🚀 Server listo");
+});

@@ -1,94 +1,53 @@
-const axios = require("axios");
-
-// 🔥 CUENTAS
-async function getAdAccounts(token) {
-  const res = await axios.get("https://graph.facebook.com/v19.0/me/adaccounts", {
-    params: {
-      fields: "name,account_id",
-      access_token: token
-    }
-  });
-
-  return res.data.data;
-}
-
-// 🔥 CAMPAÑAS ACTIVAS
-async function hasActiveCampaigns(accountId, token) {
-  try {
-    const res = await axios.get(`https://graph.facebook.com/v19.0/act_${accountId}/campaigns`, {
-      params: {
-        fields: "effective_status",
-        access_token: token
-      }
-    });
-
-    return res.data.data.some(c => c.effective_status === "ACTIVE");
-
-  } catch {
-    return false;
-  }
-}
-
-// 🔥 INSIGHTS INTELIGENTE (TIPO METAREPORT)
-async function getInsights(accountId, token) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/act_${accountId}/insights`, {
-    params: {
-      fields: "spend,impressions,clicks,actions,cpm,ctr",
-      date_preset: "last_7d",
-      access_token: token
-    }
-  });
-
-  const data = res.data.data[0] || {};
+function calcularMetricas(data){
 
   const spend = parseFloat(data.spend || 0);
-  const impressions = parseInt(data.impressions || 0);
-  const clicks = parseInt(data.clicks || 0);
-  const ctr = parseFloat(data.ctr || 0);
-  const cpm = parseFloat(data.cpm || 0);
+  const impressions = parseFloat(data.impressions || 0);
+  const clicks = parseFloat(data.clicks || 0);
 
-  let objective = "traffic";
-  let results = 0;
+  const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+  const cpc = clicks > 0 ? spend / clicks : 0;
+  const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
+  const frequency = data.frequency || 0;
 
-  if (data.actions) {
+  return { ctr, cpc, cpm, frequency };
+}
 
-    const map = {
-      purchase: ["purchase", "offsite_conversion.purchase"],
-      lead: ["lead", "onsite_conversion.lead_grouped"],
-      message: ["messaging_conversation_started_7d"],
-      traffic: ["landing_page_view", "link_click"]
-    };
+// 🔥 ALERTAS PRO (tipo MetaReport)
+function generarAlertasPro(current, previous){
 
-    for (let key in map) {
-      for (let type of map[key]) {
-        const found = data.actions.find(a => a.action_type === type);
-        if (found) {
-          objective = key;
-          results = parseInt(found.value);
-          break;
-        }
-      }
+  let insights = [];
+
+  // 🚨 CTR
+  if(current.ctr < 1){
+    insights.push("🚨 CTR bajo → el creativo no está llamando la atención");
+  } else if(current.ctr < 3){
+    insights.push("⚠️ CTR normal → se puede mejorar el creativo");
+  } else {
+    insights.push("✅ CTR bueno → los anuncios están funcionando");
+  }
+
+  // 🚨 FRECUENCIA
+  if(current.frequency > 3){
+    insights.push("🚨 Frecuencia alta → saturación de audiencia");
+  } else if(current.frequency > 2){
+    insights.push("⚠️ Frecuencia en aumento → vigilar fatiga");
+  } else {
+    insights.push("✅ Frecuencia saludable");
+  }
+
+  // 🚨 COSTOS (comparación)
+  if(previous){
+    if(current.cpa > previous.cpa * 1.2){
+      insights.push("🚨 El costo por resultado está subiendo");
+    } else if(current.cpa < previous.cpa){
+      insights.push("✅ El costo por resultado está mejorando");
     }
   }
 
-  const cpa = results > 0 ? spend / results : 0;
-  const cpc = clicks > 0 ? spend / clicks : 0;
-
-  return {
-    spend,
-    results,
-    cpa,
-    cpc,
-    ctr,
-    cpm,
-    impressions,
-    clicks,
-    objective
-  };
+  return insights;
 }
 
 module.exports = {
-  getAdAccounts,
-  getInsights,
-  hasActiveCampaigns
+  calcularMetricas,
+  generarAlertasPro
 };
