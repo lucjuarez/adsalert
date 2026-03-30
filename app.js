@@ -10,22 +10,22 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 📩 MÓDULO DE EMAIL (Con Fix para Hostinger)
+// 📩 MÓDULO DE EMAIL (Configurado con tu captura)
 // ==========================================
 const transporter = nodemailer.createTransport({
-  host: "mail.lucianojuarez.com.ar",
+  host: "mail.lucianojuarez.com.ar", 
   port: 465,
-  secure: true,
+  secure: true, // true porque usas SSL puerto 465
   auth: {
     user: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false // 🔥 Esto evita que Node.js bloquee el certificado de tu hosting
+    rejectUnauthorized: false // Vital para evitar bloqueos del certificado SSL del hosting
   }
 });
 
-async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificación del Sistema" }) {
+async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificación" }) {
   try {
     await transporter.sendMail({
       from: '"AdsAlert Global" <alertads@lucianojuarez.com.ar>',
@@ -33,37 +33,29 @@ async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificaci�
       subject: subject,
       text: message
     });
-    console.log(`Email enviado exitosamente a: ${email}`);
+    console.log(`✅ Email enviado a: ${email}`);
   } catch (error) {
-    console.error("Error enviando email:", error.message);
+    console.error("❌ Error enviando email:", error.message);
   }
 }
 
 // ==========================================
-// 📊 MÓDULO META (Data & Análisis Multicuenta)
+// 📊 MÓDULO META (Extracción de Datos)
 // ==========================================
 async function getAccountInsights(accountId, token) {
   try {
     const res = await axios.get(
       `https://graph.facebook.com/v19.0/${accountId}/insights`,
-      {
-        params: {
-          fields: "spend,impressions,clicks,actions,frequency",
-          date_preset: "last_7d",
-          access_token: token
-        }
-      }
+      { params: { fields: "spend,impressions,clicks,actions,frequency", date_preset: "last_7d", access_token: token } }
     );
-    
     const data = res.data.data[0] || {};
     const spend = parseFloat(data.spend || 0);
-    if (spend === 0) return null; // Ignoramos si no gastó plata para no hacer ruido
+    if (spend === 0) return null;
 
     const impressions = parseFloat(data.impressions || 0);
     const clicks = parseFloat(data.clicks || 0);
     const frequency = parseFloat(data.frequency || 0);
     
-    // Contar resultados (Compras + Leads + Mensajes)
     let totalResults = 0;
     if (data.actions) {
       data.actions.forEach(a => {
@@ -77,107 +69,107 @@ async function getAccountInsights(accountId, token) {
     const cpr = totalResults > 0 ? (spend / totalResults).toFixed(2) : 0;
 
     return { spend, totalResults, cpr, ctr, frequency: frequency.toFixed(2) };
-  } catch (error) {
-    return null; // Si hay error de API (ej. sin permisos o cuenta cerrada), saltamos la cuenta
+  } catch (error) { return null; }
+}
+
+// ==========================================
+// 🚀 ESCANEO INMEDIATO (El "Dashboard" por mail)
+// ==========================================
+async function runInitialScan(userConfig) {
+  console.log("Iniciando escaneo inicial para:", userConfig.email);
+  try {
+    const accountsRes = await axios.get(
+      `https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${userConfig.token}`
+    );
+    const accounts = accountsRes.data.data || [];
+    let reporteList = [];
+
+    for (let acc of accounts) {
+      if (acc.account_status !== 1) continue;
+      const accountId = `act_${acc.account_id}`;
+      const metrics = await getAccountInsights(accountId, userConfig.token);
+      
+      if (metrics) {
+        reporteList.push(`📌 ${acc.name}\nGastado: $${metrics.spend} | CPA: $${metrics.cpr} | CTR: ${metrics.ctr}% | Freq: ${metrics.frequency}\n`);
+      }
+    }
+
+    let msg = `¡Hola!\n\nAdsAlert se ha conectado exitosamente a tu Business Manager.\n\nAcá tenés tu PRIMER REPORTE INMEDIATO con el estado de las cuentas que están corriendo ahora mismo:\n\n`;
+    if (reporteList.length > 0) {
+      msg += reporteList.join('\n');
+    } else {
+      msg += "No hay cuentas gastando presupuesto en este momento.\n";
+    }
+    msg += `\nEl motor de AdsAlert ahora vigilará estos números 24/7 de forma silenciosa en la nube.\n\nSaludos,\nSistema AdsAlert`;
+
+    await sendEmail({ email: userConfig.email, subject: "✅ AdsAlert Activado: Tu Primer Reporte", message: msg });
+  } catch(e) {
+    console.error("Error en escaneo inicial:", e.message);
   }
 }
 
 // ==========================================
 // 🧠 ENDPOINTS
 // ==========================================
-let users = []; // Base de datos en memoria. Llave primaria: email
+let users = []; 
 
 app.post("/save-config", (req, res) => {
   const { token, email, alerts, daily, hour } = req.body;
-  
-  // Guardamos por usuario/agencia
   const existingIndex = users.findIndex(u => u.email === email);
   const config = { token, email, alerts, daily, hour, lastReport: null };
 
-  if (existingIndex >= 0) {
-    users[existingIndex] = config;
-  } else {
-    users.push(config);
-  }
-
-  // 🔥 Email de Bienvenida / Confirmación
-  sendEmail({ 
-    email: email, 
-    subject: "✅ AdsAlert: Auditoría Multicuenta Activada",
-    message: `¡Hola!\n\nTu perfil de Meta ha sido conectado exitosamente.\nAdsAlert buscará y monitoreará de forma automática todas tus cuentas publicitarias activas.\n\nReglas de vigilancia:\n- Alertas Críticas (CTR < 1%, Frecuencia > 3, Gasto sin Resultados)\n- Reporte Diario Consolidado a las 08:00 AM.\n\nSaludos,\nSistema AdsAlert` 
-  });
+  if (existingIndex >= 0) users[existingIndex] = config;
+  else users.push(config);
 
   res.json({ status: "OK" });
+
+  // Disparamos el reporte instantáneo POR MAIL en segundo plano
+  runInitialScan(config);
 });
 
-app.get("/health", (req, res) => {
-    res.send("🚀 AdsAlert Backend Running OK");
-});
+app.get("/health", (req, res) => res.send("🚀 Backend OK"));
 
 // ==========================================
-// ⏰ MÓDULO CRON (Auditoría Multicuenta 24/7)
+// ⏰ MÓDULO CRON (Vigilancia 24/7)
 // ==========================================
 cron.schedule("*/5 * * * *", async () => {
-  console.log("Iniciando escaneo de portafolios...", new Date().toLocaleTimeString());
-  
   for (let user of users) {
     try {
-      // 1. Obtener TODAS las cuentas a las que el usuario tiene acceso
-      const accountsRes = await axios.get(
-        `https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${user.token}`
-      );
-      
+      const accountsRes = await axios.get(`https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${user.token}`);
       const accounts = accountsRes.data.data || [];
       let reporteDiarioCuentas = [];
 
-      // 2. Iterar sobre cada cuenta
       for (let acc of accounts) {
-        if (acc.account_status !== 1) continue; // 1 es Activa. Si está bloqueada o cerrada, la saltamos
+        if (acc.account_status !== 1) continue;
+        const metrics = await getAccountInsights(`act_${acc.account_id}`, user.token);
+        if (!metrics) continue;
 
-        const accountId = `act_${acc.account_id}`;
-        const metrics = await getAccountInsights(accountId, user.token);
-        
-        if (!metrics) continue; // Saltamos si no hubo inversión en los últimos 7 días
-
-        // 3. Evaluación Estratégica de Alertas
         let problemas = [];
-        if (metrics.ctr > 0 && metrics.ctr < 1) problemas.push(`CTR muy bajo (${metrics.ctr}%)`);
-        if (metrics.frequency > 3) problemas.push(`Frecuencia alta indicando saturación (${metrics.frequency})`);
-        if (metrics.spend > 0 && metrics.totalResults === 0) problemas.push(`Gasto continuo de $${metrics.spend} sin lograr conversiones (Leads/Compras/Msjs).`);
+        if (metrics.ctr > 0 && metrics.ctr < 1) problemas.push(`CTR bajo (${metrics.ctr}%)`);
+        if (metrics.frequency > 3) problemas.push(`Frecuencia alta (${metrics.frequency})`);
+        if (metrics.spend > 0 && metrics.totalResults === 0) problemas.push(`Gasto sin conversiones.`);
 
-        // Disparo de Alerta Crítica (En tiempo real)
         if (user.alerts && problemas.length > 0) {
           await sendEmail({
             email: user.email,
             subject: `🚨 ALERTA CRÍTICA: ${acc.name}`,
-            message: `Atención, hemos detectado problemas de rendimiento en la cuenta "${acc.name}":\n\n${problemas.map(p => "❌ " + p).join('\n')}\n\nMétricas de la cuenta (Últimos 7d):\nInversión: $${metrics.spend}\nCosto por Resultado: $${metrics.cpr}\nCTR: ${metrics.ctr}%\nFrecuencia: ${metrics.frequency}\n\nTe sugerimos revisar la campaña en el Administrador de Anuncios.`
+            message: `Atención en la cuenta "${acc.name}":\n${problemas.join('\n')}\nCPA actual: $${metrics.cpr}`
           });
         }
-
-        // 4. Acumular datos para el Reporte Diario
-        reporteDiarioCuentas.push(`\n📌 ${acc.name}\nGastado: $${metrics.spend} | CPA: $${metrics.cpr} | CTR: ${metrics.ctr}% | Freq: ${metrics.frequency}`);
+        reporteDiarioCuentas.push(`📌 ${acc.name}\nCPA: $${metrics.cpr} | CTR: ${metrics.ctr}%`);
       }
 
-      // 5. Envío del Reporte Diario Global
       const now = new Date();
-      // Nota: La hora del servidor Render suele estar en UTC. 
-      // Si querés que sea exacto a la hora de Argentina, lo ajustaremos luego.
-      const hourStr = now.toTimeString().slice(0,5); 
-      
+      const hourStr = now.toTimeString().slice(0,5);
       if (user.daily && user.hour === hourStr && user.lastReport !== hourStr) {
         user.lastReport = hourStr;
-        
         if (reporteDiarioCuentas.length > 0) {
-          let message = `📊 REPORTE DIARIO DE PORTAFOLIO\n\nResumen de todas tus cuentas activas en Meta Ads:\n${reporteDiarioCuentas.join('\n')}\n\nEl sistema continúa monitoreando en la nube.`;
-          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message });
+          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Resumen de tu portafolio hoy:\n\n${reporteDiarioCuentas.join('\n\n')}` });
         }
       }
-
-    } catch (e) {
-      console.error(`Error procesando portafolio de ${user.email}:`, e.message);
-    }
+    } catch (e) { console.error("Error Cron:", e.message); }
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Motor Multicuenta corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor en puerto ${PORT}`));
