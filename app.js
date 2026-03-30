@@ -10,32 +10,36 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 📩 MÓDULO DE EMAIL (Configurado con tu captura)
+// 📩 MÓDULO DE EMAIL (Configuración Robusta)
 // ==========================================
 const transporter = nodemailer.createTransport({
-  host: "mail.lucianojuarez.com.ar", 
+  host: "mail.lucianojuarez.com.ar",
   port: 465,
-  secure: true, // true porque usas SSL puerto 465
+  secure: true, // SSL activado
   auth: {
     user: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false // Vital para evitar bloqueos del certificado SSL del hosting
+    rejectUnauthorized: false // Ignora errores de certificado para evitar bloqueos
   }
 });
 
 async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificación" }) {
+  console.log(`--- Intentando enviar email a: ${email} ---`);
   try {
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: '"AdsAlert Global" <alertads@lucianojuarez.com.ar>',
       to: email,
       subject: subject,
       text: message
     });
-    console.log(`✅ Email enviado a: ${email}`);
+    console.log("✅ Email enviado con éxito. ID:", info.messageId);
   } catch (error) {
-    console.error("❌ Error enviando email:", error.message);
+    console.error("❌ ERROR DETALLADO AL ENVIAR EMAIL:", error);
+    if (error.code === 'EAUTH') {
+        console.error("👉 Error de Autenticación: Revisá que EMAIL_USER y EMAIL_PASS en Render coincidan con tu hosting.");
+    }
   }
 }
 
@@ -76,7 +80,7 @@ async function getAccountInsights(accountId, token) {
 // 🚀 ESCANEO INMEDIATO (El "Dashboard" por mail)
 // ==========================================
 async function runInitialScan(userConfig) {
-  console.log("Iniciando escaneo inicial para:", userConfig.email);
+  console.log("🚀 Iniciando escaneo inmediato para:", userConfig.email);
   try {
     const accountsRes = await axios.get(
       `https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${userConfig.token}`
@@ -104,7 +108,7 @@ async function runInitialScan(userConfig) {
 
     await sendEmail({ email: userConfig.email, subject: "✅ AdsAlert Activado: Tu Primer Reporte", message: msg });
   } catch(e) {
-    console.error("Error en escaneo inicial:", e.message);
+    console.error("❌ Error en escaneo inicial:", e.message);
   }
 }
 
@@ -121,18 +125,19 @@ app.post("/save-config", (req, res) => {
   if (existingIndex >= 0) users[existingIndex] = config;
   else users.push(config);
 
+  console.log("📝 Nueva configuración guardada para:", email);
   res.json({ status: "OK" });
 
-  // Disparamos el reporte instantáneo POR MAIL en segundo plano
   runInitialScan(config);
 });
 
-app.get("/health", (req, res) => res.send("🚀 Backend OK"));
+app.get("/health", (req, res) => res.send("🚀 AdsAlert Backend OK"));
 
 // ==========================================
 // ⏰ MÓDULO CRON (Vigilancia 24/7)
 // ==========================================
 cron.schedule("*/5 * * * *", async () => {
+  console.log("⏰ Ejecutando revisión periódica de cuentas...");
   for (let user of users) {
     try {
       const accountsRes = await axios.get(`https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${user.token}`);
@@ -167,9 +172,9 @@ cron.schedule("*/5 * * * *", async () => {
           await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Resumen de tu portafolio hoy:\n\n${reporteDiarioCuentas.join('\n\n')}` });
         }
       }
-    } catch (e) { console.error("Error Cron:", e.message); }
+    } catch (e) { console.error("❌ Error Cron:", e.message); }
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Servidor en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 AdsAlert corriendo en puerto ${PORT}`));
