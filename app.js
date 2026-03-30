@@ -10,34 +10,38 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 📩 MÓDULO DE EMAIL (Lógica Original del Módulo)
+// 📩 MÓDULO DE EMAIL (Lógica Original + Debug)
 // ==========================================
 const transporter = nodemailer.createTransport({
   host: "mail.lucianojuarez.com.ar",
   port: 465,
   secure: true, 
   auth: {
+    // IMPORTANTE: Asegurate de que estos nombres estén en Render -> Environment
     user: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
     pass: process.env.EMAIL_PASS
   },
   tls: {
     rejectUnauthorized: false 
-  }
+  },
+  logger: true, // Esto mostrará toda la charla del servidor en Render Logs
+  debug: true   // Esto nos dirá el error exacto si falla el saludo SMTP
 });
 
 async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificación" }) {
   console.log(`Intentando enviar email a: ${email}`);
   try {
-    // Restaurada la configuración de 'from' del módulo inicial
     const info = await transporter.sendMail({
       from: "alertads@lucianojuarez.com.ar", 
       to: email,
       subject: subject,
       text: message
     });
-    console.log("✅ Email enviado. Respuesta del servidor:", info.response);
+    console.log("✅ Email enviado correctamente:", info.response);
   } catch (error) {
-    console.error("❌ ERROR EN EL MÓDULO DE EMAIL:", error.message);
+    console.error("❌ ERROR CRÍTICO EN ENVÍO:");
+    console.error("Mensaje:", error.message);
+    console.error("Código:", error.code);
   }
 }
 
@@ -128,7 +132,7 @@ app.post("/save-config", (req, res) => {
   runInitialScan(config);
 });
 
-app.get("/health", (req, res) => res.send("🚀 Backend OK"));
+app.get("/health", (req, res) => res.send("🚀 AdsAlert Backend OK"));
 
 // ==========================================
 // ⏰ MÓDULO CRON (Vigilancia 24/7)
