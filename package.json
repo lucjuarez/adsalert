@@ -1,6 +1,7 @@
 {
-  "name": "adsalert",
+  "name": "adsalert-backend",
   "version": "1.0.0",
+  "description": "Motor de monitoreo automático para Meta Ads",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"
@@ -8,6 +9,7 @@
   "dependencies": {
     "axios": "^1.6.0",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
     "node-cron": "^3.0.2",
     "nodemailer": "^6.9.0"
