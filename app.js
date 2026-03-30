@@ -10,37 +10,48 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 📩 MÓDULO DE EMAIL (Lógica Original de Luciano)
+// 📩 MÓDULO DE EMAIL (Configuración de Alta Compatibilidad)
 // ==========================================
-// Usamos las variables que configuraste en el panel de Render
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "mail.lucianojuarez.com.ar",
   port: parseInt(process.env.SMTP_PORT) || 465,
-  secure: true, // SSL habilitado
+  secure: true, 
   auth: {
     user: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false // Permite certificados del hosting sin bloquear la conexión
+    rejectUnauthorized: false, // Ignora certificados no verificados
+    minVersion: "TLSv1.2"      // Fuerza una versión de TLS compatible
+  },
+  connectionTimeout: 10000,    // 10 segundos de espera
+  greetingTimeout: 10000
+});
+
+// 🔥 VERIFICADOR DE ARRANQUE (Aparecerá en los Logs de Render)
+transporter.verify((error, success) => {
+  if (error) {
+    console.error("❌ ERROR CRÍTICO: El servidor de correo NO responde al logueo:");
+    console.error(error);
+  } else {
+    console.log("✅ ÉXITO: El servidor está listo para enviar correos desde AdsAlert.");
   }
 });
 
 async function sendEmail({ email, message, subject = "🚨 AdsAlert: Notificación" }) {
-  console.log(`Intentando enviar email a: ${email}`);
+  console.log(`--- Iniciando intento de envío a: ${email} ---`);
   try {
-    // Es vital que 'from' sea idéntico al 'user' de autenticación
     const info = await transporter.sendMail({
       from: process.env.EMAIL_USER || "alertads@lucianojuarez.com.ar",
       to: email,
       subject: subject,
       text: message
     });
-    console.log("✅ Email enviado correctamente. Respuesta:", info.response);
+    console.log("✅ RESPUESTA POSITIVA DEL SERVIDOR:", info.response);
   } catch (error) {
-    console.error("❌ ERROR EN EL ENVÍO DE EMAIL:");
-    console.error("Mensaje de error:", error.message);
-    console.error("Código de error:", error.code);
+    console.error("❌ ERROR EN EL PROCESO DE ENVÍO:");
+    console.error("Mensaje:", error.message);
+    console.error("Código:", error.code);
   }
 }
 
@@ -51,19 +62,10 @@ async function getAccountInsights(accountId, token) {
   try {
     const res = await axios.get(
       `https://graph.facebook.com/v19.0/${accountId}/insights`,
-      { 
-        params: { 
-          fields: "spend,impressions,clicks,actions,frequency", 
-          date_preset: "last_7d", 
-          access_token: token 
-        } 
-      }
+      { params: { fields: "spend,impressions,clicks,actions,frequency", date_preset: "last_7d", access_token: token } }
     );
-    
     const data = res.data.data[0] || {};
     const spend = parseFloat(data.spend || 0);
-    
-    // Si no hay inversión, no procesamos para evitar alertas vacías
     if (spend === 0) return null;
 
     const impressions = parseFloat(data.impressions || 0);
@@ -73,7 +75,6 @@ async function getAccountInsights(accountId, token) {
     let totalResults = 0;
     if (data.actions) {
       data.actions.forEach(a => {
-        // Filtro de resultados principales: Compras, Leads y Mensajes
         if (a.action_type.includes("purchase") || a.action_type.includes("lead") || a.action_type.includes("messaging")) {
           totalResults += (parseInt(a.value) || 0);
         }
@@ -84,16 +85,14 @@ async function getAccountInsights(accountId, token) {
     const cpr = totalResults > 0 ? (spend / totalResults).toFixed(2) : 0;
 
     return { spend, totalResults, cpr, ctr, frequency: frequency.toFixed(2) };
-  } catch (error) { 
-    return null; 
-  }
+  } catch (error) { return null; }
 }
 
 // ==========================================
-// 🚀 ESCANEO INMEDIATO (El Dashboard por Mail)
+// 🚀 ESCANEO INMEDIATO (El Reporte que debe llegar)
 // ==========================================
 async function runInitialScan(userConfig) {
-  console.log("Iniciando auditoría inmediata para:", userConfig.email);
+  console.log("🚀 Ejecutando escaneo inmediato para:", userConfig.email);
   try {
     const accountsRes = await axios.get(
       `https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${userConfig.token}`
@@ -102,9 +101,7 @@ async function runInitialScan(userConfig) {
     let reporteList = [];
 
     for (let acc of accounts) {
-      // Solo auditamos cuentas con estado 1 (Activa)
       if (acc.account_status !== 1) continue;
-      
       const accountId = `act_${acc.account_id}`;
       const metrics = await getAccountInsights(accountId, userConfig.token);
       
@@ -113,29 +110,22 @@ async function runInitialScan(userConfig) {
       }
     }
 
-    let msg = `¡Hola!\n\nAdsAlert se ha conectado correctamente a tu perfil.\n\nEste es tu REPORTE DE ACTIVACIÓN con el estado de tus cuentas activas hoy:\n\n`;
-    
+    let msg = `¡Hola!\n\nAdsAlert se ha conectado exitosamente.\n\nEste es tu reporte de activación inmediata:\n\n`;
     if (reporteList.length > 0) {
       msg += reporteList.join('\n');
     } else {
-      msg += "No se detectaron cuentas con inversión activa en los últimos 7 días.\n";
+      msg += "No se detectó inversión en los últimos 7 días en tus cuentas activas.\n";
     }
-    
-    msg += `\nEl sistema ahora monitoreará estos indicadores 24/7 de forma automática.\n\nSaludos,\nAdsAlert`;
+    msg += `\nEl motor de AdsAlert ahora vigilará estos indicadores 24/7.\n\nSaludos,\nAdsAlert`;
 
-    await sendEmail({ 
-      email: userConfig.email, 
-      subject: "✅ AdsAlert: Auditoría Multicuenta Activada", 
-      message: msg 
-    });
-    
+    await sendEmail({ email: userConfig.email, subject: "✅ AdsAlert: Auditoría Activada", message: msg });
   } catch(e) {
-    console.error("Error durante el escaneo inicial:", e.message);
+    console.error("❌ Error en runInitialScan:", e.message);
   }
 }
 
 // ==========================================
-// 🧠 ENDPOINTS DEL SERVIDOR
+// 🧠 ENDPOINTS
 // ==========================================
 let users = []; 
 
@@ -144,86 +134,58 @@ app.post("/save-config", (req, res) => {
   const existingIndex = users.findIndex(u => u.email === email);
   const config = { token, email, alerts, daily, hour, lastReport: null };
 
-  if (existingIndex >= 0) {
-    users[existingIndex] = config;
-  } else {
-    users.push(config);
-  }
+  if (existingIndex >= 0) users[existingIndex] = config;
+  else users.push(config);
 
-  // Respuesta rápida al frontend para que el botón cambie a verde
   res.json({ status: "OK" });
 
-  // Ejecución del reporte inicial por mail en segundo plano
   runInitialScan(config);
 });
 
-app.get("/health", (req, res) => {
-    res.send("🚀 AdsAlert Backend Operativo");
-});
+app.get("/health", (req, res) => res.send("🚀 Backend AdsAlert OK"));
 
 // ==========================================
-// ⏰ MÓDULO CRON (Vigilancia Silenciosa 24/7)
+// ⏰ MÓDULO CRON (Vigilancia 24/7)
 // ==========================================
 cron.schedule("*/5 * * * *", async () => {
-  console.log("Ejecutando revisión de portafolios...", new Date().toLocaleTimeString());
-  
+  console.log("⏰ Revisando portafolios...");
   for (let user of users) {
     try {
-      const accountsRes = await axios.get(
-        `https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${user.token}`
-      );
+      const accountsRes = await axios.get(`https://graph.facebook.com/v19.0/me/adaccounts?fields=name,account_id,account_status&limit=100&access_token=${user.token}`);
       const accounts = accountsRes.data.data || [];
       let reporteDiarioCuentas = [];
 
       for (let acc of accounts) {
         if (acc.account_status !== 1) continue;
-
         const metrics = await getAccountInsights(`act_${acc.account_id}`, user.token);
         if (!metrics) continue;
 
-        // EVALUACIÓN DE ALERTAS ESTRATÉGICAS
-        let alertasEncontradas = [];
-        if (metrics.ctr > 0 && metrics.ctr < 1) alertasEncontradas.push(`CTR bajo (${metrics.ctr}%)`);
-        if (metrics.frequency > 3) alertasEncontradas.push(`Frecuencia alta (${metrics.frequency})`);
-        if (metrics.spend > 0 && metrics.totalResults === 0) alertasEncontradas.push(`Gasto sin conversiones registradas.`);
+        let problemas = [];
+        if (metrics.ctr > 0 && metrics.ctr < 1) problemas.push(`CTR bajo (${metrics.ctr}%)`);
+        if (metrics.frequency > 3) problemas.push(`Frecuencia alta (${metrics.frequency})`);
+        if (metrics.spend > 0 && metrics.totalResults === 0) problemas.push(`Gasto sin resultados.`);
 
-        // Si hay alertas y el usuario las tiene activas, enviamos mail crítico
-        if (user.alerts && alertasEncontradas.length > 0) {
+        if (user.alerts && problemas.length > 0) {
           await sendEmail({
             email: user.email,
-            subject: `🚨 ALERTA DE RENDIMIENTO: ${acc.name}`,
-            message: `AdsAlert ha detectado anomalías en "${acc.name}":\n\n${alertasEncontradas.map(a => "❌ " + a).join('\n')}\n\nCPA actual: $${metrics.cpr}\nInversión 7d: $${metrics.spend}`
+            subject: `🚨 ALERTA: ${acc.name}`,
+            message: `Problemas detectados:\n${problemas.join('\n')}\nCPA: $${metrics.cpr}`
           });
         }
-        
-        reporteDiarioCuentas.push(`📌 ${acc.name}\nCPA: $${metrics.cpr} | CTR: ${metrics.ctr}% | Freq: ${metrics.frequency}`);
+        reporteDiarioCuentas.push(`📌 ${acc.name}\nCPA: $${metrics.cpr} | CTR: ${metrics.ctr}%`);
       }
 
-      // Lógica de Reporte Diario Consolidado
       const now = new Date();
       const hourStr = now.toTimeString().slice(0,5);
-      
       if (user.daily && user.hour === hourStr && user.lastReport !== hourStr) {
         user.lastReport = hourStr;
-        
         if (reporteDiarioCuentas.length > 0) {
-          await sendEmail({ 
-            email: user.email, 
-            subject: "📊 AdsAlert: Resumen Diario de Portafolio", 
-            message: `Este es el estado actual de todas tus cuentas activas:\n\n${reporteDiarioCuentas.join('\n\n')}\n\nEl monitoreo continúa activo.` 
-          });
+          await sendEmail({ email: user.email, subject: "📊 AdsAlert: Resumen Diario", message: `Estado actual:\n\n${reporteDiarioCuentas.join('\n\n')}` });
         }
       }
-    } catch (e) {
-      console.error(`Fallo en el proceso cron para ${user.email}:`, e.message);
-    }
+    } catch (e) { console.error("❌ Error Cron:", e.message); }
   }
 });
 
-// ==========================================
-// 🚀 INICIO DEL SERVIDOR
-// ==========================================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 AdsAlert corriendo en puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 AdsAlert corriendo en puerto ${PORT}`));
