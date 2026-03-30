@@ -1,6 +1,6 @@
 const axios = require("axios");
 
-// 📊 OBTENER INSIGHTS DE META
+// 📊 INSIGHTS META
 async function getInsights(accountId, token) {
 
   const url = `https://graph.facebook.com/v19.0/${accountId}/insights`;
@@ -20,37 +20,45 @@ async function getInsights(accountId, token) {
   const clicks = parseFloat(data.clicks || 0);
   const frequency = parseFloat(data.frequency || 0);
 
-  // 🔥 RESULTADOS CORRECTOS (TIPO METAREPORT)
-  let results = 0;
+  // 🔥 RESULTADOS POR TIPO (CLAVE)
+  let results = {
+    purchases: 0,
+    leads: 0,
+    messages: 0,
+    traffic: 0
+  };
 
   if (data.actions) {
-
-    const map = {
-      purchase: 0,
-      lead: 0,
-      message: 0,
-      traffic: 0
-    };
-
     data.actions.forEach(a => {
       const value = parseInt(a.value) || 0;
 
-      if (a.action_type.includes("purchase")) map.purchase += value;
-      if (a.action_type.includes("lead")) map.lead += value;
-      if (a.action_type.includes("messaging")) map.message += value;
-      if (a.action_type.includes("landing_page_view")) map.traffic += value;
-    });
+      if (a.action_type.includes("purchase")) {
+        results.purchases += value;
+      }
 
-    // 🎯 PRIORIDAD INTELIGENTE
-    results =
-      map.purchase ||
-      map.lead ||
-      map.message ||
-      map.traffic ||
-      0;
+      if (a.action_type.includes("lead")) {
+        results.leads += value;
+      }
+
+      if (a.action_type.includes("messaging")) {
+        results.messages += value;
+      }
+
+      if (a.action_type.includes("landing_page_view")) {
+        results.traffic += value;
+      }
+    });
   }
 
-  const cpa = results > 0 ? spend / results : 0;
+  // 🎯 RESULTADO PRINCIPAL (prioridad tipo MetaReport)
+  const mainResult =
+    results.purchases ||
+    results.leads ||
+    results.messages ||
+    results.traffic ||
+    0;
+
+  const cpa = mainResult > 0 ? spend / mainResult : 0;
 
   // 📈 MÉTRICAS
   const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
@@ -60,6 +68,7 @@ async function getInsights(accountId, token) {
   return {
     spend,
     results,
+    mainResult,
     cpa,
     ctr: parseFloat(ctr.toFixed(2)),
     cpc: parseFloat(cpc.toFixed(2)),
@@ -68,56 +77,47 @@ async function getInsights(accountId, token) {
   };
 }
 
-// 🚨 ALERTAS BASE
+// 🚨 ALERTAS
 function checkAlerts(data) {
 
-  if (data.spend === 0 && data.results === 0) {
-    return {
-      type: "warning",
-      message: "⚠️ Sin actividad"
-    };
+  if (data.spend === 0 && data.mainResult === 0) {
+    return { type: "warning", message: "⚠️ Sin actividad" };
   }
 
-  if (data.spend > 0 && data.results === 0) {
-    return {
-      type: "critical",
-      message: "🚨 Gastando sin resultados"
-    };
+  if (data.spend > 0 && data.mainResult === 0) {
+    return { type: "critical", message: "🚨 Gastando sin resultados" };
   }
 
-  return {
-    type: "ok",
-    message: "✅ Campañas funcionando correctamente"
-  };
+  return { type: "ok", message: "✅ Campañas funcionando" };
 }
 
-// 🧠 INSIGHTS TIPO METAREPORT
+// 🧠 INSIGHTS
 function generateInsights(current, previous) {
 
   let insights = [];
 
   // CTR
   if (current.ctr < 1) {
-    insights.push("🚨 CTR bajo → el creativo no está funcionando");
+    insights.push("🚨 CTR bajo → creativo débil");
   } else if (current.ctr < 3) {
-    insights.push("⚠️ CTR normal → se puede mejorar");
+    insights.push("⚠️ CTR normal → mejorar anuncios");
   } else {
-    insights.push("✅ CTR alto → buen rendimiento creativo");
+    insights.push("✅ CTR alto");
   }
 
   // FRECUENCIA
   if (current.frequency > 3) {
-    insights.push("🚨 Frecuencia alta → saturación de audiencia");
+    insights.push("🚨 Saturación de audiencia");
   } else if (current.frequency > 2) {
     insights.push("⚠️ Fatiga en aumento");
   } else {
     insights.push("✅ Frecuencia saludable");
   }
 
-  // COSTO
+  // COSTOS
   if (previous && previous.cpa > 0) {
     if (current.cpa > previous.cpa * 1.2) {
-      insights.push("🚨 Aumento del costo por resultado");
+      insights.push("🚨 Subida de costos");
     } else if (current.cpa < previous.cpa) {
       insights.push("✅ Mejora en costos");
     } else {
