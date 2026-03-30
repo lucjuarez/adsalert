@@ -27,9 +27,10 @@ async function sendEmail({ email, message }) {
     await transporter.sendMail({
       from: '"AdsAlert" <alertads@lucianojuarez.com.ar>',
       to: email,
-      subject: "🚨 Alerta AdsAlert",
+      subject: "🚨 AdsAlert: Notificación del Sistema",
       text: message
     });
+    console.log(`Email enviado con éxito a: ${email}`);
   } catch (error) {
     console.error("Error enviando email:", error.message);
   }
@@ -90,9 +91,9 @@ async function getInsights(accountId, token) {
 }
 
 function checkAlerts(data) {
-  if (data.spend === 0) return { type: "warning", message: "Sin inversión" };
-  if (data.objectives.length === 0) return { type: "critical", message: "Sin resultados" };
-  return { type: "ok", message: "Funcionando" };
+  if (data.spend === 0) return { type: "warning", message: "La cuenta no está registrando inversión." };
+  if (data.objectives.length === 0) return { type: "critical", message: "La cuenta está gastando presupuesto pero NO registra resultados." };
+  return { type: "ok", message: "Funcionando correctamente" };
 }
 
 function generateInsights(data) {
@@ -107,7 +108,7 @@ function generateInsights(data) {
 // ==========================================
 let users = []; // Base de datos temporal en memoria
 
-app.post("/save-config", (req, res) => {
+app.post("/save-config", async (req, res) => {
   const { token, accountId, accountName, email, alerts, daily, hour } = req.body;
   const existingIndex = users.findIndex(u => u.accountId === accountId);
   const config = { token, accountId, accountName, email, alerts, daily, hour, lastReport: null };
@@ -117,6 +118,13 @@ app.post("/save-config", (req, res) => {
   } else {
     users.push(config);
   }
+
+  // 🔥 DISPARO DE EMAIL DE BIENVENIDA / CONFIRMACIÓN
+  const welcomeMessage = `¡Hola!\n\nAdsAlert se ha conectado exitosamente a la cuenta publicitaria: ${accountName}.\n\nTu configuración actual:\n✅ Alertas Críticas: ${alerts ? 'Activadas' : 'Desactivadas'}\n✅ Reportes Diarios: ${daily ? 'Activados' : 'Desactivados'}\n\nA partir de este momento, el sistema vigilará tus campañas en la nube de forma silenciosa.\n\nSaludos,\nSistema AdsAlert`;
+  
+  // Lo enviamos sin bloquear la respuesta al usuario
+  sendEmail({ email: email, message: welcomeMessage });
+
   res.json({ status: "OK", message: "Vigilancia activada para " + accountName });
 });
 
@@ -128,7 +136,7 @@ app.get("/health", (req, res) => {
 // ⏰ MÓDULO CRON (Vigilancia 24/7)
 // ==========================================
 cron.schedule("*/5 * * * *", async () => {
-  console.log("Ejecutando auditoría...", new Date().toLocaleTimeString());
+  console.log("Ejecutando auditoría silenciosa...", new Date().toLocaleTimeString());
   for (let user of users) {
     try {
       const data = await getInsights(user.accountId, user.token);
@@ -136,20 +144,20 @@ cron.schedule("*/5 * * * *", async () => {
 
       const alert = checkAlerts(data);
       
-      // Alertas Críticas
+      // Alertas Críticas (Solo si el usuario las activó)
       if (user.alerts && alert.type === "critical") {
         await sendEmail({
           email: user.email,
-          message: `🚨 ALERTA CRÍTICA en ${user.accountName}: ${alert.message}`
+          message: `🚨 ALERTA CRÍTICA en ${user.accountName}\n\nEl sistema ha detectado un problema grave:\n${alert.message}\n\nInversión reciente: $${data.spend}\nCTR: ${data.ctr}%\nFrecuencia: ${data.frequency}\n\nTe sugerimos revisar el Administrador de Anuncios inmediatamente.`
         });
       }
 
-      // Reporte Diario
+      // Reporte Diario (A la hora configurada)
       const now = new Date();
       const hourStr = now.toTimeString().slice(0,5);
       if (user.daily && user.hour === hourStr && user.lastReport !== hourStr) {
         user.lastReport = hourStr;
-        let message = `📊 REPORTE DIARIO ADSALERT\n\n📢 ${user.accountName}\nGasto: $${data.spend}\nCTR: ${data.ctr}%\nFrecuencia: ${data.frequency}\n\n`;
+        let message = `📊 REPORTE DIARIO ADSALERT\n\n📢 Cuenta: ${user.accountName}\n\nResumen de las métricas:\n• Gasto: $${data.spend}\n• CTR: ${data.ctr}%\n• Frecuencia: ${data.frequency}\n\nEl sistema sigue monitoreando.`;
         await sendEmail({ email: user.email, message });
       }
     } catch (e) {
